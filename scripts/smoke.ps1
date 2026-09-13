@@ -519,6 +519,56 @@ try {
         }
     }
 
+    Step 'local config and environment reach an auxiliary server' -Pins @('D16', 'D38', '#15') {
+        $auxPort = $Port + 5
+        $aux = $null
+        $envName = 'NPU_BRIDGE_QUEUE_CAPACITY'
+        $envValue = 7
+        $localValue = 3
+        $exe = Get-ChildItem (Join-Path $repo 'src\NpuBridge\bin') -Recurse -Filter NpuBridge.exe -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        if (-not $exe) { throw 'NpuBridge.exe not found; run: dotnet build src/NpuBridge' }
+        $localSettings = Join-Path $exe.DirectoryName 'appsettings.local.json'
+        $writeLocalSettings = -not (Test-Path -LiteralPath $localSettings)
+
+        try {
+            if ($writeLocalSettings) {
+                @{ ContextCacheSize = $localValue } | ConvertTo-Json | Set-Content -LiteralPath $localSettings -Encoding utf8
+            }
+            [Environment]::SetEnvironmentVariable($envName, "$envValue", 'Process')
+
+            $aux = Start-AuxServer 'configuration' $auxPort @()
+            $healthResponse = Invoke-WebRequest -Uri "http://127.0.0.1:$auxPort/healthz" -TimeoutSec 5
+            $health = $healthResponse.Content | ConvertFrom-Json
+            if ($health.queue_capacity -ne $envValue) {
+                throw "healthz queue_capacity=$($health.queue_capacity), expected $envName=$envValue"
+            }
+            if ($writeLocalSettings) {
+                if ($health.context_cache_capacity -ne $localValue) {
+                    throw "healthz context_cache_capacity=$($health.context_cache_capacity), expected appsettings.local.json ContextCacheSize=$localValue"
+                }
+                $detail = "appsettings.local.json ContextCacheSize=$localValue => context_cache_capacity=$($health.context_cache_capacity); $envName=$envValue => queue_capacity=$($health.queue_capacity)"
+            }
+            else {
+                $detail = "appsettings.local.json already exists next to the exe; skipped its overwrite; $envName=$envValue => queue_capacity=$($health.queue_capacity)"
+            }
+        }
+        finally {
+            try {
+                if ($aux) { Stop-AuxServer $aux $auxPort 'configuration' }
+            }
+            finally {
+                try {
+                    if ($writeLocalSettings -and (Test-Path -LiteralPath $localSettings)) { Remove-Item -LiteralPath $localSettings -Force }
+                }
+                finally {
+                    Remove-Item "Env:$envName" -ErrorAction SilentlyContinue
+                }
+            }
+        }
+        $detail
+    }
+
     Step 'GET /v1/models lists the backend model' -Pins @('D77') {
         $m = Get-Json '/v1/models'
         if ($m.object -ne 'list' -or $m.data.Count -ne 1) { throw "unexpected: $($m | ConvertTo-Json -Compress)" }
