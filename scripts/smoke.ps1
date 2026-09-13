@@ -441,6 +441,84 @@ try {
         "backend=$($last.backend) model=$($last.model) identity=$($last.package_identity) loading=$($last.loading_seconds)s diagnostics=$($last.diagnostics | ConvertTo-Json -Compress)"
     }
 
+    Step 'startup fails promptly when the listen port is already in use' -Pins @('D37', '#15') {
+        $failureExe = Get-ChildItem (Join-Path $repo 'src\NpuBridge\bin') -Recurse -Filter NpuBridge.exe -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        if (-not $failureExe) { throw 'NpuBridge.exe not found; run: dotnet build src/NpuBridge' }
+        $failurePort = $Port + 4
+        $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $failurePort)
+        $failureProcess = $null
+        $outputLog = Join-Path $env:TEMP "npu-bridge-smoke-port-in-use-$failurePort.log"
+        $errorLog = "$outputLog.err"
+        $expectedMessage = 'npu-bridge could not start.'
+        try {
+            $listener.Start()
+            $failureProcess = Start-Process -FilePath $failureExe.FullName -ArgumentList '--backend', 'fake', '--listen', "http://127.0.0.1:$failurePort" `
+                -RedirectStandardOutput $outputLog -RedirectStandardError $errorLog -PassThru -NoNewWindow
+            if (-not $failureProcess.WaitForExit(10000)) {
+                throw "process did not exit within 10 seconds while port $failurePort was held"
+            }
+            if ($failureProcess.ExitCode -eq 0) { throw "process exited 0 while port $failurePort was held" }
+            $output = (Get-Content -Raw $outputLog -ErrorAction SilentlyContinue) + (Get-Content -Raw $errorLog -ErrorAction SilentlyContinue)
+            if (-not $output.Contains($expectedMessage)) {
+                throw "exit code $($failureProcess.ExitCode) did not report '$expectedMessage': $output"
+            }
+            "exit=$($failureProcess.ExitCode) within 10 seconds; reported '$expectedMessage'"
+        }
+        finally {
+            if ($failureProcess -and -not $failureProcess.HasExited) { Stop-Process -Id $failureProcess.Id -Force }
+            $listener.Stop()
+        }
+    }
+
+    Step '--self-relaunch off reports missing Phi Silica package identity' -Pins @('D24', 'D37', 'D38', '#15') {
+        if ($Backend -ne 'phi-silica') {
+            Skip '--self-relaunch off needs phi-silica; fake and aion do not require package identity.'
+        }
+
+        $identityExe = Get-ChildItem (Join-Path $repo 'src\NpuBridge\bin') -Recurse -Filter NpuBridge.exe -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        if (-not $identityExe) { throw 'NpuBridge.exe not found; run: dotnet build src/NpuBridge' }
+        $identityPort = $Port + 4
+        $identityProcess = $null
+        $expectedIdentityMessage = 'Phi Silica requires package identity, and this process has none. Register the sparse package (scripts\identity.ps1 -Install) and start npu-bridge through package activation; with --self-relaunch on (default) that happens automatically.'
+        try {
+            $identityProcess = Start-Process -FilePath $identityExe.FullName -ArgumentList '--self-relaunch', 'off', '--backend', 'phi-silica', '--listen', "http://127.0.0.1:$identityPort" `
+                -RedirectStandardOutput (Join-Path $env:TEMP "npu-bridge-smoke-no-identity-$identityPort.log") `
+                -RedirectStandardError (Join-Path $env:TEMP "npu-bridge-smoke-no-identity-$identityPort.log.err") -PassThru -NoNewWindow
+            $deadline = (Get-Date).AddSeconds(30)
+            $health = $null
+            $statusCode = $null
+            while ((Get-Date) -lt $deadline) {
+                if ($identityProcess.HasExited) { throw "--self-relaunch off process exited with code $($identityProcess.ExitCode) before /healthz replied" }
+                try {
+                    $response = Invoke-WebRequest -Uri "http://127.0.0.1:$identityPort/healthz" -SkipHttpErrorCheck -TimeoutSec 5
+                    $statusCode = [int]$response.StatusCode
+                    $health = $response.Content | ConvertFrom-Json -Depth 20
+                    if ($statusCode -eq 503 -and $health.status -eq 'failed') { break }
+                } catch [System.Net.Http.HttpRequestException] { }
+                  catch [System.Threading.Tasks.TaskCanceledException] { }
+                Start-Sleep -Milliseconds 250
+            }
+            if ($statusCode -ne 503 -or $null -eq $health -or $health.status -ne 'failed') {
+                throw "expected failed /healthz with HTTP 503 within 30 seconds; status=$statusCode body=$($health | ConvertTo-Json -Compress)"
+            }
+            if ($health.error -ne $expectedIdentityMessage) {
+                throw "missing-identity error was '$($health.error)', expected '$expectedIdentityMessage'"
+            }
+            "HTTP 503 failed; reported '$expectedIdentityMessage'"
+        }
+        finally {
+            if ($identityProcess -and -not $identityProcess.HasExited) { Stop-Process -Id $identityProcess.Id -Force }
+            if ($identityProcess) {
+                $gone = Wait-ServerGone $identityProcess.Id $identityPort 10
+                if ($gone.Listening -or $gone.Survivors.Count -gt 0) {
+                    throw "--self-relaunch off process or port $identityPort remained after stop"
+                }
+            }
+        }
+    }
+
     Step 'GET /v1/models lists the backend model' -Pins @('D77') {
         $m = Get-Json '/v1/models'
         if ($m.object -ne 'list' -or $m.data.Count -ne 1) { throw "unexpected: $($m | ConvertTo-Json -Compress)" }
