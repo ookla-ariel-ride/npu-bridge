@@ -135,6 +135,29 @@ function Get-Json([string] $path, [string] $method = 'GET', [string] $body = $nu
     return ($r.Content | ConvertFrom-Json -Depth 20)
 }
 
+function Get-RawJson([string] $path, [string] $method = 'GET', [string] $body = $null) {
+    $request = @{ Uri = "$base$path"; Method = $method; SkipHttpErrorCheck = $true; TimeoutSec = 300 }
+    if ($body) { $request.Body = $body; $request.ContentType = 'application/json' }
+    $r = Invoke-WebRequest @request
+    $json = try { $r.Content | ConvertFrom-Json -Depth 20 } catch { $null }
+    [pscustomobject]@{
+        StatusCode = [int]$r.StatusCode
+        Json = $json
+        Body = $r.Content
+    }
+}
+
+function Assert-OpenAiError($response, [string] $expectedCode) {
+    if ($response.StatusCode -ne 404) { throw "HTTP $($response.StatusCode), expected 404: $($response.Body)" }
+    if ($null -eq $response.Json -or $null -eq $response.Json.error) { throw "missing OpenAI error envelope: $($response.Body)" }
+    $names = @($response.Json.error.PSObject.Properties.Name)
+    foreach ($name in 'message', 'type', 'param', 'code') {
+        if ($names -notcontains $name) { throw "error.$name is missing: $($response.Body)" }
+    }
+    if ($response.Json.error.code -ne $expectedCode) { throw "error.code='$($response.Json.error.code)', expected '$expectedCode'" }
+    if ($null -ne $response.Json.error.param) { throw "error.param should be null: $($response.Body)" }
+}
+
 # The Phi Silica runtime can report one known RPC flake on its first generation. Capture the response
 # here, rather than through Get-Json, so only that exact 502 is retried and both errors remain visible if
 # the one retry also fails.
@@ -445,6 +468,45 @@ try {
         $m = Get-Json '/v1/models'
         if ($m.object -ne 'list' -or $m.data.Count -ne 1) { throw "unexpected: $($m | ConvertTo-Json -Compress)" }
         "model id=$($m.data[0].id)"
+    }
+
+    Step 'GET /v1/models/{id} serves and rejects model ids' -Pins @('D77') {
+        $served = Get-Json "/v1/models/$servedModel"
+        if ($served.object -ne 'model' -or $served.id -ne $servedModel -or -not $served.created -or $served.owned_by -ne 'npu-bridge') {
+            throw "unexpected served model: $($served | ConvertTo-Json -Compress)"
+        }
+        $unknown = Get-RawJson '/v1/models/smoke-unknown-model'
+        Assert-OpenAiError $unknown 'model_not_found'
+        "served=$($served.id); unknown=404 model_not_found"
+    }
+
+    Step 'GET and POST /v1/embeddings return OpenAI 404 errors' -Pins @('D77') {
+        $get = Get-RawJson '/v1/embeddings'
+        $post = Get-RawJson '/v1/embeddings' 'POST' '{}'
+        Assert-OpenAiError $get 'unknown_endpoint'
+        Assert-OpenAiError $post 'unknown_endpoint'
+        'GET=404 and POST=404; both include message,type,param:null,code'
+    }
+
+    Step 'NpuBridge.exe --help and --version report CLI metadata' -Pins @('-') {
+        $bridgeExe = if ($exe) { $exe } else {
+            Get-ChildItem (Join-Path $repo 'src\NpuBridge\bin') -Recurse -Filter NpuBridge.exe -ErrorAction SilentlyContinue |
+                Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        }
+        if (-not $bridgeExe) { throw 'NpuBridge.exe not found; run: dotnet build src/NpuBridge' }
+
+        $helpOutput = (& $bridgeExe.FullName '--help' 2>&1 | Out-String).Trim()
+        $helpExit = $LASTEXITCODE
+        if ($helpExit -ne 0) { throw "--help exit code ${helpExit}: $helpOutput" }
+        foreach ($verb in 'run', 'service', 'task') {
+            if ($helpOutput -notmatch "(?m)\b$verb\b") { throw "--help does not name '$verb': $helpOutput" }
+        }
+
+        $versionOutput = (& $bridgeExe.FullName '--version' 2>&1 | Out-String).Trim()
+        $versionExit = $LASTEXITCODE
+        if ($versionExit -ne 0) { throw "--version exit code ${versionExit}: $versionOutput" }
+        if ($versionOutput -notmatch '(?m)^npu-bridge\s+\S+') { throw "--version did not print a version string: $versionOutput" }
+        "help=0 (run, service, task); version=0 ($versionOutput)"
     }
 
     # --- raw generation through the backend (diagnostic endpoint) -----------
