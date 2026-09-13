@@ -757,23 +757,27 @@ public class ChatCompletionsTests
     public async Task Client_disconnect_disposes_the_context_and_does_not_500()
     {
         var capture = new CapturingLoggerProvider();
+        var deltaGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var fake = new FakeBackend(new FakeBackendOptions
         {
             Responder = _ => Enumerable.Repeat("tok ", 200),
-            TokenDelay = TimeSpan.FromMilliseconds(20),
+            DeltaGate = deltaGate,
         });
         await using var host = await BridgeTestHost.StartAsync(fake, loggerProvider: capture);
 
         using var cts = new CancellationTokenSource();
         var post = host.Client.PostAsJsonAsync(Path, ChatBody.User(), cts.Token);
 
-        // Disconnect on an observed signal rather than after a fixed delay: on a loaded machine a
-        // stopwatch fires before the request has reached the handler, and then the test asserts nothing
-        // about a disconnect — it asserts that a request nobody started leaked no context. Waiting for
-        // the backend to have been called is the same thing the streaming disconnect tests do by
-        // reading a byte off the response first.
-        await TestWait.UntilAsync(() => fake.Calls.Count > 0);
+        await TestWait.UntilAsync(() => fake.DeltasEmitted == 1);
         await cts.CancelAsync();
+        try
+        {
+            await TestWait.UntilAsync(() => fake.CancellationsObserved == 1);
+        }
+        finally
+        {
+            deltaGate.SetResult();
+        }
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => post);
 
@@ -782,6 +786,7 @@ public class ChatCompletionsTests
         Assert.Equal(0, fake.ActiveContexts);
         Assert.Single(fake.Calls);
         Assert.DoesNotContain(capture.Records, r => r.Level >= LogLevel.Error);
+        host.AssertNoLeak();
     }
 
     /// <summary>
