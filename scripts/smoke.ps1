@@ -284,6 +284,8 @@ function Start-AuxServer([string] $label, [int] $port, [string[]] $extraArgs) {
                 if ($r.StatusCode -eq 200) { return $p }
                 if ($last.status -eq 'failed') { throw "$label backend failed: $($last.error)" }
             } catch [System.Net.Http.HttpRequestException] { }
+              # PowerShell 7 surfaces Invoke-WebRequest -TimeoutSec timeouts as TaskCanceledException (verified locally).
+              catch [System.Threading.Tasks.TaskCanceledException] { }
             Start-Sleep -Seconds 2
         }
         throw "$label server not ready after ${ReadyTimeoutSeconds}s; last: $($last | ConvertTo-Json -Compress)"
@@ -372,6 +374,8 @@ try {
                 if ($last.status -eq 'failed') { throw "backend failed: $($last.error)" }
                 if ($last.status -eq 'degraded') { throw "backend is degraded: $($last.last_generation.error)" }
             } catch [System.Net.Http.HttpRequestException] { }
+              # PowerShell 7 surfaces Invoke-WebRequest -TimeoutSec timeouts as TaskCanceledException (verified locally).
+              catch [System.Threading.Tasks.TaskCanceledException] { }
             Start-Sleep -Seconds 2
         }
         if (-not $last -or $last.status -ne 'ready') { throw "not ready after ${ReadyTimeoutSeconds}s; last: $($last | ConvertTo-Json -Compress)" }
