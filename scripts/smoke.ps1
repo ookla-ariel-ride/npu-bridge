@@ -39,6 +39,10 @@
 .EXAMPLE
   .\scripts\smoke.ps1 -Backend phi-silica
   .\scripts\smoke.ps1 -Backend fake -Port 5299
+  .\scripts\smoke.ps1 -Backend fake -JsonOut $env:TEMP\smoke.json
+
+.PARAMETER JsonOut
+  Optional path for a UTF-8 (without BOM) JSON summary of the run.
 #>
 [CmdletBinding()]
 param(
@@ -46,13 +50,15 @@ param(
     [int] $Port = 5273,
     [switch] $NoStart,
     [int] $ToolProbeRuns = 5,
-    [int] $ReadyTimeoutSeconds = 600
+    [int] $ReadyTimeoutSeconds = 600,
+    [string] $JsonOut
 )
 
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path $PSScriptRoot -Parent
 $base = "http://127.0.0.1:$Port"
 $results = [System.Collections.Generic.List[object]]::new()
+$startedAt = (Get-Date).ToUniversalTime().ToString('o')
 
 # Thrown by a Step body to report SKIP instead of FAIL/PASS, without affecting the exit code.
 class SkipStepException : System.Exception {
@@ -73,17 +79,21 @@ function Fail([string] $reason) {
     throw [FailStepException]::new($reason)
 }
 
-function Step([string] $name, [scriptblock] $body) {
+function Step([string] $name, [scriptblock] $body, [string[]] $Pins = @('-')) {
+    $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     Write-Host "==> $name" -ForegroundColor Cyan
     try {
         $detail = & $body
-        $results.Add([pscustomobject]@{ Step = $name; Result = 'PASS'; Detail = "$detail" })
+        $stopwatch.Stop()
+        $results.Add([pscustomobject]@{ Step = $name; Result = 'PASS'; Pins = @($Pins); Detail = "$detail"; DurationMs = $stopwatch.ElapsedMilliseconds })
         Write-Host "    PASS $detail" -ForegroundColor Green
     } catch [SkipStepException] {
-        $results.Add([pscustomobject]@{ Step = $name; Result = 'SKIP'; Detail = $_.Exception.Message })
+        $stopwatch.Stop()
+        $results.Add([pscustomobject]@{ Step = $name; Result = 'SKIP'; Pins = @($Pins); Detail = $_.Exception.Message; DurationMs = $stopwatch.ElapsedMilliseconds })
         Write-Host "    SKIP $($_.Exception.Message)" -ForegroundColor Yellow
     } catch {
-        $results.Add([pscustomobject]@{ Step = $name; Result = 'FAIL'; Detail = $_.Exception.Message })
+        $stopwatch.Stop()
+        $results.Add([pscustomobject]@{ Step = $name; Result = 'FAIL'; Pins = @($Pins); Detail = $_.Exception.Message; DurationMs = $stopwatch.ElapsedMilliseconds })
         Write-Host "    FAIL $($_.Exception.Message)" -ForegroundColor Red
     }
 }
@@ -92,19 +102,22 @@ function Step([string] $name, [scriptblock] $body) {
 # step that cannot get a clean read is a finding, not a bridge failure, so a surprising number never
 # adds to the FAIL count or the exit code; only a body that calls Fail, for a contradiction of
 # something the bridge guarantees, does (D79).
-function InfoStep([string] $name, [scriptblock] $body) {
+function InfoStep([string] $name, [scriptblock] $body, [string[]] $Pins = @('-')) {
+    $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     Write-Host "==> $name" -ForegroundColor Cyan
     try {
         $detail = & $body
     } catch [FailStepException] {
-        $results.Add([pscustomobject]@{ Step = $name; Result = 'FAIL'; Detail = $_.Exception.Message })
+        $stopwatch.Stop()
+        $results.Add([pscustomobject]@{ Step = $name; Result = 'FAIL'; Pins = @($Pins); Detail = $_.Exception.Message; DurationMs = $stopwatch.ElapsedMilliseconds })
         Write-Host '    FAIL' -ForegroundColor Red
         ("$($_.Exception.Message)" -split "`n") | ForEach-Object { Write-Host "      $_" -ForegroundColor Red }
         return
     } catch {
         $detail = "could not measure: $($_.Exception.Message)"
     }
-    $results.Add([pscustomobject]@{ Step = $name; Result = 'INFO'; Detail = "$detail" })
+    $stopwatch.Stop()
+    $results.Add([pscustomobject]@{ Step = $name; Result = 'INFO'; Pins = @($Pins); Detail = "$detail"; DurationMs = $stopwatch.ElapsedMilliseconds })
     Write-Host '    INFO' -ForegroundColor Yellow
     ("$detail" -split "`n") | ForEach-Object { Write-Host "      $_" -ForegroundColor Yellow }
 }
@@ -329,16 +342,17 @@ function Stop-AuxServer($p, [int] $port, [string] $label = 'aux') {
     # the previous run's child is still shutting down on it.
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
     $gone = Wait-ServerGone $p.Id $port
+    $sw.Stop()
     $elapsed = [Math]::Round($sw.Elapsed.TotalSeconds, 1)
     $step = "teardown: the $label server (port $port) exits and the port frees"
     if ($gone.Listening -or $gone.Survivors.Count -gt 0) {
         $detail = "after the $label server (pid $($p.Id)) was stopped, listening=$($gone.Listening) and NpuBridge pid(s) $(($gone.Survivors | ForEach-Object ProcessId) -join ',') remain after $elapsed s"
-        $results.Add([pscustomobject]@{ Step = $step; Result = 'FAIL'; Detail = $detail })
+        $results.Add([pscustomobject]@{ Step = $step; Result = 'FAIL'; Pins = @('D37'); Detail = $detail; DurationMs = $sw.ElapsedMilliseconds })
         Write-Host "    FAIL $detail" -ForegroundColor Red
     }
     else {
         $detail = "pid $($p.Id) gone and port $port free after $elapsed s"
-        $results.Add([pscustomobject]@{ Step = $step; Result = 'PASS'; Detail = $detail })
+        $results.Add([pscustomobject]@{ Step = $step; Result = 'PASS'; Pins = @('D37'); Detail = $detail; DurationMs = $sw.ElapsedMilliseconds })
         Write-Host "    PASS $detail" -ForegroundColor Green
     }
 }
@@ -360,7 +374,7 @@ if (-not $NoStart) {
 
 try {
     # --- wait for ready -----------------------------------------------------
-    Step 'healthz becomes ready' {
+    Step 'healthz becomes ready' -Pins @('D77', 'D79', '#15') {
         $deadline = (Get-Date).AddSeconds($ReadyTimeoutSeconds)
         $last = $null
         while ((Get-Date) -lt $deadline) {
@@ -394,14 +408,14 @@ try {
         "backend=$($last.backend) model=$($last.model) identity=$($last.package_identity) loading=$($last.loading_seconds)s diagnostics=$($last.diagnostics | ConvertTo-Json -Compress)"
     }
 
-    Step 'GET /v1/models lists the backend model' {
+    Step 'GET /v1/models lists the backend model' -Pins @('D77') {
         $m = Get-Json '/v1/models'
         if ($m.object -ne 'list' -or $m.data.Count -ne 1) { throw "unexpected: $($m | ConvertTo-Json -Compress)" }
         "model id=$($m.data[0].id)"
     }
 
     # --- raw generation through the backend (diagnostic endpoint) -----------
-    Step 'POST /debug/generate produces text from the model' {
+    Step 'POST /debug/generate produces text from the model' -Pins @('-') {
         $body = @{ prompt = 'In one short sentence, what is a neural processing unit?' } | ConvertTo-Json
         $g = Get-Json '/debug/generate' 'POST' $body
         if ($g.status -ne 'Complete') { throw "status=$($g.status) detail=$($g.detail) text='$($g.text)'" }
@@ -409,7 +423,7 @@ try {
         "callbacks=$($g.progress_callbacks) chars=$($g.chars) ttft=$($g.ttft_ms)ms total=$($g.total_ms)ms text='$($g.text.Trim().Substring(0, [Math]::Min(120, $g.text.Trim().Length)))'"
     }
 
-    Step 'preflight reports the whole short prompt as usable' {
+    Step 'preflight reports the whole short prompt as usable' -Pins @('D66', 'D73') {
         $g = Get-Json '/debug/generate' 'POST' (@{ prompt = 'Say OK.' } | ConvertTo-Json)
         if ($null -eq $g.usable_prompt_chars) {
             # Aion has no GetUsablePromptLength (D66). On the two backends that do, a null here is the
@@ -421,14 +435,14 @@ try {
         else { "usable=$($g.usable_prompt_chars) == prompt=$($g.prompt_chars)" }
     }
 
-    Step 'POST /debug/generate honours a system prompt' {
+    Step 'POST /debug/generate honours a system prompt' -Pins @('D45') {
         $body = @{ prompt = 'What is your name?'; system = 'You are Ada. Always answer with exactly the two words: I am Ada.' } | ConvertTo-Json
         $g = Get-Json '/debug/generate' 'POST' $body
         if ($g.status -ne 'Complete') { throw "status=$($g.status)" }
         "text='$($g.text.Trim())' (system prompt honoured: $($g.text -match 'Ada'))"
     }
 
-    Step 'client disconnect mid-generation is survived' {
+    Step 'client disconnect mid-generation is survived' -Pins @('D51') {
         if ($Backend -eq 'fake') {
             Skip 'the fake backend generates with no token delay, so there is no window in which to abort; meaningful on phi-silica and aion only'
         }
@@ -447,13 +461,13 @@ try {
     # One gate per feature: non-streaming (chunk 3) and streaming with the client-side cut (chunk 4)
     # are built now; tool calls (chunk 7) are not, and must report SKIP, not FAIL, so a clean run
     # stays "All steps passed".
-    Step 'POST /v1/chat/completions rejects an empty body' {
+    Step 'POST /v1/chat/completions rejects an empty body' -Pins @('D77') {
         $c = Get-Json '/v1/chat/completions' 'POST' '{}' @(400)
         if ($c.error.type -ne 'invalid_request_error') { throw "error.type=$($c.error.type): $($c | ConvertTo-Json -Compress)" }
         "HTTP 400 error.type=$($c.error.type)"
     }
 
-    Step 'POST /v1/chat/completions (non-streaming)' {
+    Step 'POST /v1/chat/completions (non-streaming)' -Pins @('D77') {
         $body = @{
             model    = $servedModel
             messages = @(
@@ -485,7 +499,7 @@ try {
         "ttft=$($sw.ElapsedMilliseconds)ms total=$($sw.ElapsedMilliseconds)ms (non-streaming: single write, so ttft==total) usage=$($u | ConvertTo-Json -Compress) text='$($text.Substring(0, [Math]::Min(80, $text.Length)))'"
     }
 
-    Step 'POST /v1/chat/completions (streaming SSE)' {
+    Step 'POST /v1/chat/completions (streaming SSE)' -Pins @('D52', 'D77') {
         $body = @{
             model          = $servedModel
             stream         = $true
@@ -544,7 +558,7 @@ try {
     # A one-word reply says nothing about decode speed, so the throughput number comes from a reply
     # long enough to time: estimated tokens (chars/4, D44) over the decode phase after the first chunk.
     # Reported, not asserted -- a slow model is a finding, not a broken bridge.
-    InfoStep 'measurement: streaming throughput (estimated tokens per second)' {
+    InfoStep 'measurement: streaming throughput (estimated tokens per second)' -Pins @('D44', 'D69', 'D80') {
         $body = @{
             model          = $servedModel
             stream         = $true
@@ -568,7 +582,7 @@ try {
         "asked: one user message, max_tokens=128, streaming`nttft=$($s.FirstChunkMs)ms total=$($s.TotalMs)ms chars=$($s.Content.Length) completion_tokens=$($u.completion_tokens) chunks=$($s.Chunks.Count) finish=$((Get-FinishReasons $s.Chunks) -join ',')`ntok/s over the decode phase: $tokS ($counter tokens per second after the first chunk; $([Math]::Round($s.Content.Length / [Math]::Max(1, $u.completion_tokens), 2)) chars per token on this reply)"
     }
 
-    Step 'streaming client-side cut (max_tokens and stop)' {
+    Step 'streaming client-side cut (max_tokens and stop)' -Pins @('D53', 'D80') {
         # D53/D80: the cap is a budget in the backend's own tokens (Phi-3 on phi-silica, chars/4
         # elsewhere), so usage.completion_tokens lands on the cap and never above it, and the text that
         # reached the client counts exactly what usage says. Streaming is where the cut is hardest:
@@ -640,7 +654,7 @@ try {
     # callback that arrived after a completed generation ended. Those counters are the assertion. Whether the
     # two shapes' texts match on the wire is reported but not asserted: temperature 0 on this runtime
     # is not a documented promise of determinism, so a difference there is a finding about the model.
-    Step 'both shapes return the deltas the adapter delivered (text contract)' {
+    Step 'both shapes return the deltas the adapter delivered (text contract)' -Pins @('D67', 'D69') {
         $prompt = 'Reply with exactly the word PONG.'
         $messages = @(
             @{ role = 'system'; content = 'You are a terse assistant.' }
@@ -669,7 +683,7 @@ try {
     }
 
     # --- chunk 5: the context cache and overflow handling ----------------------------------------
-    Step 'context cache: a continuing conversation reuses its context and sends only the tail' {
+    Step 'context cache: a continuing conversation reuses its context and sends only the tail' -Pins @('D71', 'D72') {
         # Three requests. The first opens a conversation; its context goes into the cache. The second
         # continues it with the reply echoed back: a hit checks that context out, sends only the new
         # turn, and stores it back. The third is the control: the same transcript with the assistant
@@ -715,7 +729,7 @@ try {
         "control (miss):      ttft=$($miss.FirstChunkMs)ms total=$($miss.TotalMs)ms reply='$($r3.Substring(0, [Math]::Min(60, $r3.Length)))'"
     }
 
-    Step 'overflow: an over-length transcript is refused by the preflight, and truncated with --truncate-history' {
+    Step 'overflow: an over-length transcript is refused by the preflight, and truncated with --truncate-history' -Pins @('D55', 'D73') {
         # Eight exchanges of about two thousand characters each: some 17,000 rendered characters,
         # past the 13,429 Phi Silica said fit (D55). On a backend with a preflight the refusal must
         # arrive without a generation and therefore quickly -- the 26 s of D55 was the cost of asking
@@ -782,7 +796,7 @@ try {
         $lines -join "`n"
     }
 
-    Step 'native system text is refused before CreateContext' {
+    Step 'native system text is refused before CreateContext' -Pins @('D97') {
         # D97: this hardware probe targets the character-ceiling branch with a 1,000-character margin.
         $systemText = [string]::new('x', 33000)
 
@@ -816,7 +830,7 @@ try {
         $lines -join [Environment]::NewLine
     }
 
-    Step 'native system text token-window guard is refused before CreateContext' {
+    Step 'native system text token-window guard is refused before CreateContext' -Pins @('D97') {
         # D97: this hardware probe targets the token-window branch below the character ceiling.
         $health = Get-Json '/healthz'
         if ($null -eq $health.context_window_tokens) {
@@ -856,7 +870,7 @@ try {
     # prefix counts the same number of tokens. Three texts with very different characters per token;
     # the preflight is read off the 400 a lone over-length user message earns, which is passed to the
     # model raw (D71), with no generation. A fake or a backend that counts chars/4 has nothing to compare.
-    Step 'tokenizer: the preflight boundary is the same token count for every text (D80)' {
+    Step 'tokenizer: the preflight boundary is the same token count for every text (D80)' -Pins @('D55', 'D71', 'D80') {
         # Only a backend with a measured tokenizer gets here, and every such backend has the preflight the
         # tokenizer was measured against; a missing preflight shows up below as a non-400 or a message
         # without the preflight's numbers, so no generation is spent finding out first.
@@ -913,7 +927,7 @@ try {
         # leaking out as content. Whether the model chooses to call at all is the measurement, and PLAN
         # section 2.6 expects 60 to 80 % on a model this size: a low rate is a finding to record, not a
         # failing step.
-        Step "tool-call compliance probe ($ToolProbeRuns runs)" {
+        Step "tool-call compliance probe ($ToolProbeRuns runs)" -Pins @('D83') {
             $tools = @(@{
                 type     = 'function'
                 function = @{
@@ -981,7 +995,7 @@ try {
     # --- chunk 8: the generation scheduler and legacy /v1/completions -----------------------------
     # Issue #4's own requirement, and the gap docs/FUTURE.md records by name: "two simultaneous requests
     # against a real NPU are entirely untested." Every step above this one has run one request at a time.
-    Step 'two concurrent requests share the queue: the second genuinely waits behind the first' {
+    Step 'two concurrent requests share the queue: the second genuinely waits behind the first' -Pins @('D84', 'D87') {
         # The fake backend generates with no per-token delay (the same reason 'client disconnect
         # mid-generation' skips it above), so the window in which the second request is provably still
         # queued -- rather than already finished, or never queued because the fake finished too fast to
@@ -1024,7 +1038,7 @@ try {
         "both requests completed (A: $($a.Json.usage.completion_tokens) completion tokens, B: $($b.Json.usage.completion_tokens)); queue_depth peaked at $maxDepth while both were outstanding, proving the second genuinely waited on the scheduler rather than getting its own context"
     }
 
-    Step 'POST /v1/completions (legacy, non-streaming)' {
+    Step 'POST /v1/completions (legacy, non-streaming)' -Pins @('D77', 'D91') {
         $body = @{ model = $servedModel; prompt = 'Reply with exactly the word PONG.' } | ConvertTo-Json -Depth 5
         $c = Get-Json '/v1/completions' 'POST' $body
         if ($c.object -ne 'text_completion') { throw "object=$($c.object)" }
@@ -1043,7 +1057,7 @@ try {
         "id=$($c.id) text='$($choice.text.Trim())' usage=$($u | ConvertTo-Json -Compress)"
     }
 
-    Step 'POST /v1/completions (legacy, streaming SSE)' {
+    Step 'POST /v1/completions (legacy, streaming SSE)' -Pins @('D91') {
         $body = @{
             model          = $servedModel
             stream         = $true
@@ -1088,7 +1102,7 @@ try {
         "chunks=$($s.Chunks.Count) ttft=$($s.FirstChunkMs)ms total=$($s.TotalMs)ms usage=$($u | ConvertTo-Json -Compress) text='$($text.Trim())'"
     }
 
-    Step 'queue-full: a request beyond capacity gets 429 with Retry-After' {
+    Step 'queue-full: a request beyond capacity gets 429 with Retry-After' -Pins @('D84', 'D87') {
         # The fake backend's generation is fast enough that three near-simultaneous requests against a
         # capacity of one can race the worker draining the queue before the third even arrives -- the
         # same reason the concurrency step above skips it. On phi-silica and aion a real generation is
@@ -1141,7 +1155,7 @@ try {
     }
 
     # --- measurement 1: how far the progress-callback count and the chars/4 estimate are from the tokens
-    InfoStep 'measurement: token count vs chars/4 estimate vs progress-callback count' {
+    InfoStep 'measurement: token count vs chars/4 estimate vs progress-callback count' -Pins @('D44', 'D80') {
         $prompt = 'In two or three sentences, explain what a neural processing unit does and why a Copilot+ PC has one.'
 
         # Single generation: read the callback count, the character count and the counted tokens off the
@@ -1185,7 +1199,7 @@ tokenizer on phi-silica; these ratios are both assumptions checked on one real g
     }
 
     # --- measurement 2: which --system-prompt-placement does this model actually obey? -------------
-    InfoStep 'measurement: system-prompt placement (native vs prompt)' {
+    InfoStep 'measurement: system-prompt placement (native vs prompt)' -Pins @('D45', 'D50', 'D69') {
         if ($NoStart) {
             return 'skipped: -NoStart is set; this measurement starts two dedicated servers on an auxiliary port, which -NoStart precludes.'
         }
@@ -1250,7 +1264,7 @@ tokenizer on phi-silica; these ratios are both assumptions checked on one real g
     }
 
     # --- measurement 3: does cancelling a generation actually stop the accelerator? ----------------
-    InfoStep 'measurement: does the client-side cut stop the NPU, or only the client?' {
+    InfoStep 'measurement: does the client-side cut stop the NPU, or only the client?' -Pins @('D51', 'D53') {
         # The open question since the research phase: the WinRT cancel is advisory, and nobody has
         # established whether the device stops mid-generation or runs to completion regardless. The cut
         # makes it measurable, because it cancels a real generation partway through -- and because the
@@ -1323,7 +1337,7 @@ tokenizer on phi-silica; these ratios are both assumptions checked on one real g
     }
 
     # --- measurement 4: how long does an over-length prompt take to be refused, and how? -----------
-    InfoStep 'measurement: over-length prompt -- verdict latency and where the verdict lands (D52)' {
+    InfoStep 'measurement: over-length prompt -- verdict latency and where the verdict lands (D52)' -Pins @('D52', 'D55') {
         # StreamingOptions.DefaultFirstKeepAliveDelay, as the running server reports it on /healthz: the
         # number shipped code uses, not a copy of it that could drift. D52 turns on which side of it
         # the verdict lands: the streaming path writes nothing until the first token or the first
@@ -1409,12 +1423,13 @@ tokenizer on phi-silica; these ratios are both assumptions checked on one real g
         $lines -join "`n"
     }
 
-    InfoStep 'final generation health' {
+    InfoStep 'final generation health' -Pins @('-') {
         $health = Get-Json '/healthz' -expect 200,503
         "last_generation=$($health.last_generation | ConvertTo-Json -Compress -Depth 5) consecutive_backend_faults=$($health.consecutive_backend_faults)"
     }
 } finally {
     if ($proc) {
+        $teardownStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
         # Stopping the by-path process stops the activated instance it supervises (D37). That half of
         # the contract went unchecked on every run until now. On phi-silica the child must be there
         # before the stop, found by the contract itself (--supervisor-pid <our pid> on its command
@@ -1458,24 +1473,60 @@ tokenizer on phi-silica; these ratios are both assumptions checked on one real g
             $problems.Add("could not verify the teardown: $($_.Exception.Message)")
         }
 
+        $teardownStopwatch.Stop()
         if ($problems.Count -gt 0) {
             $detail = $problems -join '; '
-            $results.Add([pscustomobject]@{ Step = $teardown; Result = 'FAIL'; Detail = $detail })
+            $results.Add([pscustomobject]@{ Step = $teardown; Result = 'FAIL'; Pins = @('D37', '#15'); Detail = $detail; DurationMs = $teardownStopwatch.ElapsedMilliseconds })
             Write-Host "    FAIL $detail" -ForegroundColor Red
         }
         else {
             $child = if ($childrenBefore.Count -gt 0) { " and child pid $($childrenBefore -join ',')" } else { '' }
             $detail = "pid $($proc.Id)$child gone and port $Port free after $elapsed s"
-            $results.Add([pscustomobject]@{ Step = $teardown; Result = 'PASS'; Detail = $detail })
+            $results.Add([pscustomobject]@{ Step = $teardown; Result = 'PASS'; Pins = @('D37', '#15'); Detail = $detail; DurationMs = $teardownStopwatch.ElapsedMilliseconds })
             Write-Host "    PASS $detail" -ForegroundColor Green
         }
     }
 }
 
 Write-Host ''
-$results | Format-Table -AutoSize | Out-String -Width 200 | Write-Host
+$results | Select-Object Step, Result, Detail | Format-Table -AutoSize | Out-String -Width 200 | Write-Host
+$passed = @($results | Where-Object Result -eq 'PASS').Count
 $failed = @($results | Where-Object Result -eq 'FAIL').Count
 $skipped = @($results | Where-Object Result -eq 'SKIP').Count
 $info = @($results | Where-Object Result -eq 'INFO').Count
+$pins = @($results | ForEach-Object { $_.Pins } | Where-Object { $_ -and $_ -ne '-' } | Sort-Object -Unique)
+Write-Host "pins: $($pins -join ' ')"
+
+if ($JsonOut) {
+    $commit = $null
+    try {
+        $commit = (& git -C $repo rev-parse HEAD 2>$null).Trim()
+        if ($LASTEXITCODE -ne 0) { $commit = $null }
+    }
+    catch { $commit = $null }
+
+    $summary = [ordered]@{
+        backend    = $Backend
+        port       = $Port
+        startedAt  = $startedAt
+        finishedAt = (Get-Date).ToUniversalTime().ToString('o')
+        commit     = $commit
+        verdict    = if ($failed -eq 0) { 'pass' } else { 'fail' }
+        counts     = [ordered]@{ pass = $passed; fail = $failed; skip = $skipped; info = $info }
+        pins       = $pins
+        steps      = @($results | ForEach-Object {
+            [ordered]@{
+                name       = $_.Step
+                result     = $_.Result.ToLowerInvariant()
+                pins       = @($_.Pins)
+                detail     = $_.Detail
+                durationMs = $_.DurationMs
+            }
+        })
+    }
+    $json = $summary | ConvertTo-Json -Depth 5
+    [System.IO.File]::WriteAllText($JsonOut, $json, [System.Text.UTF8Encoding]::new($false))
+}
+
 if ($failed -gt 0) { Write-Host "$failed step(s) failed" -ForegroundColor Red; exit 1 }
 Write-Host "All steps passed ($skipped skipped, $info informational)" -ForegroundColor Green
