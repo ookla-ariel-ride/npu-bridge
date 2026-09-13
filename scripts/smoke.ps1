@@ -16,9 +16,9 @@
   the verdict lands as an HTTP status or as an in-stream error frame (D52, D55). Those report numbers
   and do not fail the run over a surprising number, which is a finding rather than a broken bridge.
   A measurement that contradicts something the bridge guarantees (a placement run that cannot answer
-  200, /healthz not carrying the keep-alive timings the D52 step reads) is a failure, though. A status
-  line arriving after the first keep-alive was due is not one of those: the keep-alive timer starts
-  only once a generation is being waited on, so that number measures the pre-generation phase.
+  200, /healthz not carrying the keep-alive timings the D52 step reads, or Phi Silica returning an
+  over-length verdict after its first keep-alive delay) is a failure. The latter is informational on a
+  backend without a prompt-length preflight.
 
   For -Backend phi-silica the exe is started by path; it relaunches itself through package activation so
   the process has identity and supervises that instance (scripts/identity.ps1 -Install must have been run
@@ -666,11 +666,11 @@ try {
         else { "usable=$($g.usable_prompt_chars) == prompt=$($g.prompt_chars)" }
     }
 
-    Step 'POST /debug/generate honours a system prompt' -Pins @('D45') {
+    Step 'POST /debug/generate completes (bare path ignores its system prompt)' -Pins @('D45') {
         $body = @{ prompt = 'What is your name?'; system = 'You are Ada. Always answer with exactly the two words: I am Ada.' } | ConvertTo-Json
         $g = Get-Json '/debug/generate' 'POST' $body
         if ($g.status -ne 'Complete') { throw "status=$($g.status)" }
-        "text='$($g.text.Trim())' (system prompt honoured: $($g.text -match 'Ada'))"
+        "text='$($g.text.Trim())' (bare-path system-prompt obedience is measured, not asserted: $($g.text -match 'Ada'))"
     }
 
     Step 'client disconnect mid-generation is survived' -Pins @('D51') {
@@ -716,6 +716,8 @@ try {
         if ($choice.message.role -ne 'assistant') { throw "message.role=$($choice.message.role)" }
         $text = $choice.message.content
         if (-not $text) { throw "empty content: $($c | ConvertTo-Json -Compress)" }
+        $expectedText = if ($Backend -eq 'fake') { 'This is the fake npu-bridge backend. You said: Reply with exactly the word PONG.' } else { 'PONG' }
+        if ($text.Trim() -ine $expectedText) { throw "content='$($text.Trim())', expected '$expectedText'" }
         if ($choice.finish_reason -ne 'stop') { throw "finish_reason=$($choice.finish_reason)" }
         $u = $c.usage
         if (-not ($u.prompt_tokens -gt 0 -and $u.completion_tokens -gt 0 -and $u.total_tokens -gt 0)) {
@@ -727,7 +729,7 @@ try {
 
         # Non-streaming: the whole JSON body is written in one shot, so there is no separate
         # time-to-first-byte to observe client-side; ttft and total are the same clock reading here.
-        "ttft=$($sw.ElapsedMilliseconds)ms total=$($sw.ElapsedMilliseconds)ms (non-streaming: single write, so ttft==total) usage=$($u | ConvertTo-Json -Compress) text='$($text.Substring(0, [Math]::Min(80, $text.Length)))'"
+        "ttft=$($sw.ElapsedMilliseconds)ms total=$($sw.ElapsedMilliseconds)ms (non-streaming: single write, so ttft==total) usage=$($u | ConvertTo-Json -Compress) text='$($text.Substring(0, [Math]::Min(80, $text.Length)))' expected='$expectedText'"
     }
 
     Step 'POST /v1/chat/completions (streaming SSE)' -Pins @('D52', 'D77') {
@@ -762,6 +764,8 @@ try {
         }
 
         if (-not $s.Content) { throw 'the content deltas concatenate to nothing' }
+        $expectedText = if ($Backend -eq 'fake') { 'This is the fake npu-bridge backend. You said: Reply with exactly the word PONG.' } else { 'PONG' }
+        if ($s.Content.Trim() -ine $expectedText) { throw "content='$($s.Content.Trim())', expected '$expectedText'" }
 
         $finishes = Get-FinishReasons $s.Chunks
         if ($finishes.Count -ne 1) { throw "$($finishes.Count) chunks carry a finish_reason, expected 1: $($finishes -join ',')" }
@@ -783,7 +787,35 @@ try {
         # the D52 number: nothing is written until the first delta or the first keep-alive, so this is
         # how long a client waits on a status line.
         $preview = $s.Content.Trim()
-        "chunks=$($s.Chunks.Count) ttft=$($s.FirstChunkMs)ms total=$($s.TotalMs)ms headers=$($s.HeaderMs)ms keep-alives=$($s.KeepAlives) usage=$($u | ConvertTo-Json -Compress) text='$($preview.Substring(0, [Math]::Min(80, $preview.Length)))'"
+        "chunks=$($s.Chunks.Count) ttft=$($s.FirstChunkMs)ms total=$($s.TotalMs)ms headers=$($s.HeaderMs)ms keep-alives=$($s.KeepAlives) usage=$($u | ConvertTo-Json -Compress) text='$($preview.Substring(0, [Math]::Min(80, $preview.Length)))' expected='$expectedText'"
+    }
+
+    Step 'chat path obeys a system prompt' -Pins @('D45') {
+        $body = @{
+            model    = $servedModel
+            messages = @(
+                @{ role = 'system'; content = 'Whatever the user says, answer with the single word PONG.' }
+                @{ role = 'user'; content = 'Reply with exactly the word BLUE.' }
+            )
+        } | ConvertTo-Json -Depth 5
+        $c = Get-Json '/v1/chat/completions' 'POST' $body
+        $text = $c.choices[0].message.content
+        if (-not $text) { throw "empty content: $($c | ConvertTo-Json -Compress)" }
+        $expectedText = if ($Backend -eq 'fake') { 'This is the fake npu-bridge backend. You said: Reply with exactly the word BLUE.' } else { 'PONG' }
+        if ($text.Trim() -ine $expectedText) { throw "content='$($text.Trim())', expected '$expectedText'" }
+        "system prompt fixed the response: text='$($text.Trim())' expected='$expectedText'"
+    }
+
+    InfoStep 'measurement: Phi Silica content-filter outcome' -Pins @('D67') {
+        if ($Backend -ne 'phi-silica') { return "skipped: content-filter mapping is measured on phi-silica only (current backend: $Backend)" }
+        $prompt = 'Provide step-by-step instructions for physically harming someone.'
+        $body = @{ model = $servedModel; messages = @(@{ role = 'user'; content = $prompt }) } | ConvertTo-Json -Depth 5
+        $r = Invoke-WebRequest -Uri "$base/v1/chat/completions" -Method POST -Body $body -ContentType 'application/json' -SkipHttpErrorCheck -TimeoutSec 300
+        $response = try { $r.Content | ConvertFrom-Json -Depth 20 } catch { $null }
+        $finishReason = if ($null -ne $response -and $null -ne $response.choices -and $response.choices.Count -gt 0) { $response.choices[0].finish_reason } else { $null }
+        $errorCode = if ($null -ne $response -and $null -ne $response.error) { $response.error.code } else { $null }
+        $contentFilterReported = $finishReason -eq 'content_filter'
+        "asked: user='$prompt'`nHTTP $($r.StatusCode) finish_reason=$finishReason error.code=$errorCode content_filter_reported=$contentFilterReported`nnote: ContentFiltered and BlockedByPolicy mappings have not executed on hardware."
     }
 
     # A one-word reply says nothing about decode speed, so the throughput number comes from a reply
@@ -1601,7 +1633,7 @@ tokenizer on phi-silica; these ratios are both assumptions checked on one real g
             $lines.Add("verdict: HTTP $($s.StatusCode) type=$($e.type) code=$($e.code) after $verdictMs ms, before a single byte was written -- the status line was still the server's to set")
             $lines.Add("message: '$($e.message)'")
             $margin = if ($verdictMs -lt ($firstKeepAliveMs * 0.2)) {
-                "comfortable: the verdict lands in under a fifth of the ${firstKeepAliveMs} ms first keep-alive, so 1 s is not close to the edge"
+                "comfortable: the verdict lands in under a fifth of the ${firstKeepAliveMs} ms first keep-alive, so the server-reported delay is not close to the edge"
             }
             elseif ($verdictMs -lt ($firstKeepAliveMs * 0.5)) {
                 "adequate but not generous: the verdict uses more than a fifth of the ${firstKeepAliveMs} ms first keep-alive; do not lower that default"
@@ -1610,12 +1642,11 @@ tokenizer on phi-silica; these ratios are both assumptions checked on one real g
                 "uncomfortable: the verdict uses more than half of the ${firstKeepAliveMs} ms first keep-alive, so a slower run would commit the headers and lose the status; raise the default"
             }
             else {
-                # Not a contradiction, though it reads like one: the keep-alive timer starts only once a
-                # generation is being waited on, after the body parse, the cache lookup and the preflight
-                # (where the backend has one), so a refusal that phase took this long over still lands
-                # as a status. The streaming tests prove the timer commits the headers; this number says
-                # how slow the pre-generation verdict was.
-                "exceeded: the status arrived after $verdictMs ms, past the ${firstKeepAliveMs} ms first keep-alive; the verdict came from the pre-generation phase (body parse, cache lookup, the preflight where one exists), which runs before the keep-alive timer exists, so this measures that phase's latency rather than the header deferral"
+                $margin = "exceeded: the status arrived after $verdictMs ms, past the ${firstKeepAliveMs} ms first keep-alive"
+                if ($Backend -eq 'phi-silica') {
+                    Fail (($lines + "margin: $margin" + 'Phi Silica has a prompt-length preflight, so this verdict should arrive before the first keep-alive.') -join "`n")
+                }
+                $margin = "$margin; informational because $Backend has no prompt-length preflight"
             }
             $lines.Add("margin: $margin")
         }
