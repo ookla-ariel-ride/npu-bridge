@@ -94,8 +94,9 @@ Do not `dotnet build` while a server is up — `smoke.ps1`'s, or one you started
 locked and the copy fails. **`dotnet test` builds too**, so it fails the same way; stop the server
 first, or accept that the suite cannot run while one is live.
 Two smoke lines look like failures and are not. A *first*-generation "the remote procedure call failed"
-is the model runtime's known flake — re-run once; the same fault on a later generation is real. And
-`system prompt honoured: False` on the `/debug/generate` row is D45: only the bare debug path ignores it.
+is the model runtime's known flake — the script retries it once itself and prints when it did; the same
+fault on a later generation is real. And `system prompt honoured: False` on the `/debug/generate` row
+is D45: only the bare debug path ignores it.
 
 **Never send more than ~40,000 characters of system text to Phi Silica (D94, issue #29).** At 44,000
 and above, `CreateContext` fail-fasts `WorkloadsSessionHost.exe` (`0xc0000409`) and wedges the NPU for

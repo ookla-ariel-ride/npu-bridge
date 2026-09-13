@@ -53,6 +53,8 @@ $ErrorActionPreference = 'Stop'
 $repo = Split-Path $PSScriptRoot -Parent
 $base = "http://127.0.0.1:$Port"
 $results = [System.Collections.Generic.List[object]]::new()
+$firstGenerationRpcRetries = 0
+# TODO(SQ-37): SQ-32 should include this as firstGenerationRetries in its JSON summary.
 
 # Thrown by a Step body to report SKIP instead of FAIL/PASS, without affecting the exit code.
 class SkipStepException : System.Exception {
@@ -119,6 +121,34 @@ function Get-Json([string] $path, [string] $method = 'GET', [string] $body = $nu
     }
     if ($expect -notcontains [int]$r.StatusCode) { throw "HTTP $($r.StatusCode) for $method $path : $($r.Content)" }
     return ($r.Content | ConvertFrom-Json -Depth 20)
+}
+
+# The Phi Silica runtime can report one known RPC flake on its first generation. Capture the response
+# here, rather than through Get-Json, so only that exact 502 is retried and both errors remain visible if
+# the one retry also fails.
+function Get-FirstDebugGeneration([string] $body) {
+    $request = @{ Uri = "$base/debug/generate"; Method = 'POST'; Body = $body; ContentType = 'application/json'; SkipHttpErrorCheck = $true; TimeoutSec = 300 }
+    $first = Invoke-WebRequest @request
+    $firstStatus = [int]$first.StatusCode
+    $firstJson = try { $first.Content | ConvertFrom-Json -Depth 20 } catch { $null }
+    $isKnownFault = $Backend -eq 'phi-silica' -and $firstStatus -eq 502 -and
+        $null -ne $firstJson.error -and $firstJson.error.message -like '*remote procedure call failed*'
+    if (-not $isKnownFault) {
+        if ($firstStatus -ne 200) { throw "HTTP $firstStatus for POST /debug/generate : $($first.Content)" }
+        return [pscustomobject]@{ Json = $firstJson; Retried = $false }
+    }
+
+    $firstError = $first.Content
+    Write-Host '    known first-generation RPC fault; waiting 5 seconds before one retry' -ForegroundColor Yellow
+    Start-Sleep -Seconds 5
+    $script:firstGenerationRpcRetries++
+    $retry = Invoke-WebRequest @request
+    $retryStatus = [int]$retry.StatusCode
+    $retryJson = try { $retry.Content | ConvertFrom-Json -Depth 20 } catch { $null }
+    if ($retryStatus -ne 200 -or $null -eq $retryJson) {
+        throw "first-generation RPC fault: first error=$firstError; retry error=HTTP ${retryStatus}: $($retry.Content)"
+    }
+    [pscustomobject]@{ Json = $retryJson; Retried = $true; FirstError = $firstError; RetryBody = $retry.Content }
 }
 
 # Reads a server-sent-event response frame by frame rather than buffering it, because three of the
@@ -407,10 +437,18 @@ try {
     # --- raw generation through the backend (diagnostic endpoint) -----------
     Step 'POST /debug/generate produces text from the model' {
         $body = @{ prompt = 'In one short sentence, what is a neural processing unit?' } | ConvertTo-Json
-        $g = Get-Json '/debug/generate' 'POST' $body
-        if ($g.status -ne 'Complete') { throw "status=$($g.status) detail=$($g.detail) text='$($g.text)'" }
-        if (-not $g.text) { throw 'empty text' }
-        "callbacks=$($g.progress_callbacks) chars=$($g.chars) ttft=$($g.ttft_ms)ms total=$($g.total_ms)ms text='$($g.text.Trim().Substring(0, [Math]::Min(120, $g.text.Trim().Length)))'"
+        $generation = Get-FirstDebugGeneration $body
+        $g = $generation.Json
+        if ($g.status -ne 'Complete') {
+            if ($generation.Retried) { throw "first-generation RPC fault: first error=$($generation.FirstError); retry error=$($generation.RetryBody)" }
+            throw "status=$($g.status) detail=$($g.detail) text='$($g.text)'"
+        }
+        if (-not $g.text) {
+            if ($generation.Retried) { throw "first-generation RPC fault: first error=$($generation.FirstError); retry error=$($generation.RetryBody)" }
+            throw 'empty text'
+        }
+        $retryDetail = if ($generation.Retried) { '; first attempt hit known first-generation RPC fault and retry passed' } else { '' }
+        "callbacks=$($g.progress_callbacks) chars=$($g.chars) ttft=$($g.ttft_ms)ms total=$($g.total_ms)ms text='$($g.text.Trim().Substring(0, [Math]::Min(120, $g.text.Trim().Length)))'$retryDetail"
     }
 
     Step 'preflight reports the whole short prompt as usable' {
@@ -1481,5 +1519,6 @@ $results | Format-Table -AutoSize | Out-String -Width 200 | Write-Host
 $failed = @($results | Where-Object Result -eq 'FAIL').Count
 $skipped = @($results | Where-Object Result -eq 'SKIP').Count
 $info = @($results | Where-Object Result -eq 'INFO').Count
-if ($failed -gt 0) { Write-Host "$failed step(s) failed" -ForegroundColor Red; exit 1 }
+if ($failed -gt 0) { Write-Host "first-generation RPC retry: $firstGenerationRpcRetries"; Write-Host "$failed step(s) failed" -ForegroundColor Red; exit 1 }
 Write-Host "All steps passed ($skipped skipped, $info informational)" -ForegroundColor Green
+Write-Host "first-generation RPC retry: $firstGenerationRpcRetries"
