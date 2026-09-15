@@ -8,7 +8,10 @@
   /debug/generate (raw model access, cancellation, prompt-length preflight), /v1/chat/completions
   non-streaming and streaming (the SSE wire contract and the client-side cut), the context cache
   (a continuation hits, a control misses, both timed) and overflow handling (the preflight refusal,
-  then --truncate-history on a second server) and a tool-call compliance probe.
+  then --truncate-history on a second server), a startup failure when the listen port is in use,
+  --self-relaunch off without identity (503), local config and NPU_BRIDGE_* environment reaching an
+  auxiliary server, /v1/models/{id} and /v1/embeddings 404 envelopes, --help and --version, and a
+  tool-call compliance probe.
 
   It also takes the measurements docs/DECISIONS.md cites: the token estimate against the progress
   callbacks, which system-prompt placement this model obeys, whether cancelling a generation really
@@ -36,13 +39,13 @@
 .PARAMETER ToolProbeRuns
   How many times to run the tool-call compliance probe (0 = skip).
 
+.PARAMETER JsonOut
+  Optional path for a UTF-8 (without BOM) JSON summary of the run.
+
 .EXAMPLE
   .\scripts\smoke.ps1 -Backend phi-silica
   .\scripts\smoke.ps1 -Backend fake -Port 5299
   .\scripts\smoke.ps1 -Backend fake -JsonOut $env:TEMP\smoke.json
-
-.PARAMETER JsonOut
-  Optional path for a UTF-8 (without BOM) JSON summary of the run.
 #>
 [CmdletBinding()]
 param(
@@ -324,7 +327,9 @@ function Test-PortListening([int] $p) {
 
 # Starts a second, throwaway NpuBridge.exe on its own port for a measurement that needs a startup
 # option (e.g. --system-prompt-placement) the already-running main server was not started with.
-# Waits for /healthz to report ready before returning; throws on failure. Independent of $proc/$base.
+# Auxiliary ports are $Port+1 placement, +2 truncate, +3 queue-capacity-1, +4 port-in-use then
+# identity, and +5 config. Waits for /healthz to report ready before returning; throws on failure.
+# Independent of $proc/$base.
 function Start-AuxServer([string] $label, [int] $port, [string[]] $extraArgs) {
     if (Test-PortListening $port) { throw "something already listens on port $port for the $label run" }
     $exe = Get-ChildItem (Join-Path $repo 'src\NpuBridge\bin') -Recurse -Filter NpuBridge.exe -ErrorAction SilentlyContinue |
@@ -482,15 +487,15 @@ try {
                 throw "process did not exit within 10 seconds while port $failurePort was held"
             }
             if ($failureProcess.ExitCode -eq 0) { throw "process exited 0 while port $failurePort was held" }
-            $output = (Get-Content -Raw $outputLog -ErrorAction SilentlyContinue) + (Get-Content -Raw $errorLog -ErrorAction SilentlyContinue)
+            $output = "$(Get-Content -Raw $outputLog -ErrorAction SilentlyContinue)$(Get-Content -Raw $errorLog -ErrorAction SilentlyContinue)"
             if (-not $output.Contains($expectedMessage)) {
                 throw "exit code $($failureProcess.ExitCode) did not report '$expectedMessage': $output"
             }
             "exit=$($failureProcess.ExitCode) within 10 seconds; reported '$expectedMessage'"
         }
         finally {
-            if ($failureProcess -and -not $failureProcess.HasExited) { Stop-Process -Id $failureProcess.Id -Force }
             $listener.Stop()
+            if ($failureProcess -and -not $failureProcess.HasExited) { Stop-Process -Id $failureProcess.Id -Force -ErrorAction SilentlyContinue }
         }
     }
 
@@ -717,7 +722,12 @@ try {
         $text = $choice.message.content
         if (-not $text) { throw "empty content: $($c | ConvertTo-Json -Compress)" }
         $expectedText = if ($Backend -eq 'fake') { 'This is the fake npu-bridge backend. You said: Reply with exactly the word PONG.' } else { 'PONG' }
-        if ($text.Trim() -ine $expectedText) { throw "content='$($text.Trim())', expected '$expectedText'" }
+        if ($Backend -eq 'fake') {
+            if ($text.Trim() -ine $expectedText) { throw "content='$($text.Trim())', expected '$expectedText'" }
+        }
+        elseif ($text.Trim() -notmatch "^[\s\p{P}]*$expectedText[\s\p{P}]*$") {
+            throw "content='$($text.Trim())', expected '$expectedText'"
+        }
         if ($choice.finish_reason -ne 'stop') { throw "finish_reason=$($choice.finish_reason)" }
         $u = $c.usage
         if (-not ($u.prompt_tokens -gt 0 -and $u.completion_tokens -gt 0 -and $u.total_tokens -gt 0)) {
@@ -765,7 +775,12 @@ try {
 
         if (-not $s.Content) { throw 'the content deltas concatenate to nothing' }
         $expectedText = if ($Backend -eq 'fake') { 'This is the fake npu-bridge backend. You said: Reply with exactly the word PONG.' } else { 'PONG' }
-        if ($s.Content.Trim() -ine $expectedText) { throw "content='$($s.Content.Trim())', expected '$expectedText'" }
+        if ($Backend -eq 'fake') {
+            if ($s.Content.Trim() -ine $expectedText) { throw "content='$($s.Content.Trim())', expected '$expectedText'" }
+        }
+        elseif ($s.Content.Trim() -notmatch "^[\s\p{P}]*$expectedText[\s\p{P}]*$") {
+            throw "content='$($s.Content.Trim())', expected '$expectedText'"
+        }
 
         $finishes = Get-FinishReasons $s.Chunks
         if ($finishes.Count -ne 1) { throw "$($finishes.Count) chunks carry a finish_reason, expected 1: $($finishes -join ',')" }
@@ -802,7 +817,12 @@ try {
         $text = $c.choices[0].message.content
         if (-not $text) { throw "empty content: $($c | ConvertTo-Json -Compress)" }
         $expectedText = if ($Backend -eq 'fake') { 'This is the fake npu-bridge backend. You said: Reply with exactly the word BLUE.' } else { 'PONG' }
-        if ($text.Trim() -ine $expectedText) { throw "content='$($text.Trim())', expected '$expectedText'" }
+        if ($Backend -eq 'fake') {
+            if ($text.Trim() -ine $expectedText) { throw "content='$($text.Trim())', expected '$expectedText'" }
+        }
+        elseif ($text.Trim() -notmatch "^[\s\p{P}]*$expectedText[\s\p{P}]*$") {
+            throw "content='$($text.Trim())', expected '$expectedText'"
+        }
         "system prompt fixed the response: text='$($text.Trim())' expected='$expectedText'"
     }
 
@@ -1632,14 +1652,14 @@ tokenizer on phi-silica; these ratios are both assumptions checked on one real g
             $verdictMs = $s.HeaderMs
             $lines.Add("verdict: HTTP $($s.StatusCode) type=$($e.type) code=$($e.code) after $verdictMs ms, before a single byte was written -- the status line was still the server's to set")
             $lines.Add("message: '$($e.message)'")
-            $margin = if ($verdictMs -lt ($firstKeepAliveMs * 0.2)) {
-                "comfortable: the verdict lands in under a fifth of the ${firstKeepAliveMs} ms first keep-alive, so the server-reported delay is not close to the edge"
+            if ($verdictMs -lt ($firstKeepAliveMs * 0.2)) {
+                $margin = "comfortable: the verdict lands in under a fifth of the ${firstKeepAliveMs} ms first keep-alive, so the server-reported delay is not close to the edge"
             }
             elseif ($verdictMs -lt ($firstKeepAliveMs * 0.5)) {
-                "adequate but not generous: the verdict uses more than a fifth of the ${firstKeepAliveMs} ms first keep-alive; do not lower that default"
+                $margin = "adequate but not generous: the verdict uses more than a fifth of the ${firstKeepAliveMs} ms first keep-alive; do not lower that default"
             }
             elseif ($verdictMs -lt $firstKeepAliveMs) {
-                "uncomfortable: the verdict uses more than half of the ${firstKeepAliveMs} ms first keep-alive, so a slower run would commit the headers and lose the status; raise the default"
+                $margin = "uncomfortable: the verdict uses more than half of the ${firstKeepAliveMs} ms first keep-alive, so a slower run would commit the headers and lose the status; raise the default"
             }
             else {
                 $margin = "exceeded: the status arrived after $verdictMs ms, past the ${firstKeepAliveMs} ms first keep-alive"
