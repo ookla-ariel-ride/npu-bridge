@@ -104,10 +104,14 @@ refusal and `--truncate-history` on a second server, the system-text guard with 
 text whose token count is proved offline first, the tokenizer against the model's own prompt limit
 and against the window the bridge reports, a tool-call probe over N runs (`-ToolProbeRuns`, five by default), two concurrent requests
 queueing behind one another, a full queue answering 429 on a server started with capacity 1,
-`/v1/completions` on both shapes, and at the end that the relaunched child process exited and the
-port is free, then a last line with the health of the run's final generation. It starts and tears
-down four helper servers along the way, each with its own pass or fail row. Re-run `identity.ps1 -Install` whenever the build output folder or the manifest changes,
-which includes moving or renaming the clone.
+`/v1/completions` on both shapes, the port-in-use and identity failure paths, local configuration and
+NPU_BRIDGE_* re-expression on a real start, the small model and embeddings routes, `--help` and
+`--version`, the chat-path system-prompt and content-filter checks, and the once-only first-generation
+RPC retry. It writes an optional UTF-8 JSON summary with `-JsonOut <path>`, then checks that the
+relaunched child process exited and the port is free and prints the final generation health. It starts
+and tears down five helper servers along the way, each with its own pass or fail row. Re-run
+`identity.ps1 -Install` whenever the build output folder or the manifest changes, which includes moving
+or renaming the clone.
 
 ## How a request travels
 
