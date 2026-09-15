@@ -20,11 +20,7 @@ section used to duplicate actually lives; `docs/SESSION-HANDOFF.md` carries the 
 what to do next; `docs/FUTURE.md` holds deferred work. Read the handoff first; update DECISIONS and
 FUTURE whenever work changes a choice or defers something.
 
-Current state: 980 tests pass on `wave/leftovers` (last run by the Sidequest integration gate on `f1d3b8b`, 2026-09-13),
-`smoke.ps1 -Backend phi-silica` passed clean on hardware at `3c97d48` (2026-09-13, morning: all steps, 0 skipped, 6
-informational; the 2026-09-12 run with `-ToolProbeRuns 20` called the tool 20/20) and the D80 cross-check matched
-`context_window_tokens` 3581 exactly on every run. The wave is not yet merged to `main`; the repository is
-`ookla-ariel-ride/npu-bridge`.
+Current state: `main` is `8e9444e` after PR #37 merged on 2026-09-15. 980 tests pass (last recorded on `f1d3b8b`, 2026-09-13). `wave/smoke` is at `edaf254`, holds the smoke wave, and is not yet pushed or merged; the board still uses it as `integrationBranch`. The last clean hardware smoke ran on `edaf254` with 41 steps, 0 skipped and 7 informational; the D80 cross-check still matched `context_window_tokens` 3581. The repository is `ookla-ariel-ride/npu-bridge`.
 
 Standing facts that will cost you a session if you do not know them:
 
@@ -46,8 +42,8 @@ Standing facts that will cost you a session if you do not know them:
   can use this bridge at all. Compliance below that boundary is near-perfect; the window is the
   constraint, not the model's protocol discipline.
 
-Open issues carry the rest: the `leftovers` wave (D100 to D102, 2026-09-12/13) took #19, #22, #25,
-#26, #34 and #35 and ships as one PR; #24, #27 and #28 remain from chunk 8; #33 (an empty
+Open issues carry the rest: the `leftovers` wave is merged as PR #37; the `smoke` wave (#15's items and #14's
+gated tests) is on `wave/smoke` awaiting its PR; #24, #27 and #28 remain from chunk 8; #33 (an empty
 `tool_calls` fence delivered as content) still needs a ruling; #2, #11, #14 to #17 are longer-running.
 
 ## Machine reality
@@ -81,7 +77,7 @@ dotnet test --filter "DisplayName~Loading_backend"          # one test by name f
 dotnet run --project src/NpuBridge -- --backend fake --verbose   # run the exe (bin\Debug\...\win-arm64\NpuBridge.exe)
 .\scripts\identity.ps1 -Install                # sparse package identity for Phi Silica; installs the runtime dep; prints the PFN
 .\scripts\identity.ps1 -Status                 # is the package registered, which PFN
-.\scripts\smoke.ps1 -Backend phi-silica        # real NPU run: health, models, /debug/generate, chat (JSON and SSE), the cut, the cache hit, the overflow refusal and --truncate-history (on a second server), the D80 tokenizer boundary check, the D53/D55 measurements, the tool-call compliance probe (-ToolProbeRuns, default 5), the chunk 8 concurrency steps (two requests really queue; --queue-capacity 1 admits one and 429s the rest) and /v1/completions on both shapes, teardown; -JsonOut <path> writes a UTF-8 JSON run summary
+.\scripts\smoke.ps1 -Backend phi-silica        # real NPU run: health, models, /debug/generate, chat (JSON and SSE), the cut, the cache hit, the overflow refusal and --truncate-history (on a second server), the D80 tokenizer boundary check, the D53/D55 measurements, the tool-call compliance probe (-ToolProbeRuns, default 5), the chunk 8 concurrency steps (two requests really queue; --queue-capacity 1 admits one and 429s the rest), startup failure when the port is in use, --self-relaunch off without identity, local config and NPU_BRIDGE_* reaching an auxiliary server, /v1/models/{id} and /v1/embeddings 404, --help and --version, chat-path system-prompt assertion, content-filter measurement, once-only first-generation RPC retry and /v1/completions on both shapes, teardown; -JsonOut <path> writes a UTF-8 JSON run summary
 .\scripts\tool-probe.ps1 -Include WindowOccupancy -Runs 8   # issue #21 hard-case tool-call measurement against a RUNNING bridge; five dimensions (tool count, schema depth, system-prompt pressure, multi-step, window occupancy), -Stream checks JSON/SSE tool-call parity, -SelfTest checks the parser without a bridge, and -JsonOut writes the numbers. Never sends >32K chars of system text: above ~44K the Windows model host fail-fasts (D94)
 NpuBridge.exe task install|status|uninstall    # logon task that starts Phi Silica with identity (install/uninstall elevated)
 NpuBridge.exe service install|start|stop|uninstall   # Windows service for aion/fake (elevated)
@@ -94,8 +90,8 @@ Do not `dotnet build` while a server is up — `smoke.ps1`'s, or one you started
 locked and the copy fails. **`dotnet test` builds too**, so it fails the same way; stop the server
 first, or accept that the suite cannot run while one is live.
 Two smoke lines look like failures and are not. A *first*-generation "the remote procedure call failed"
-is the model runtime's known flake — the script retries it once itself and prints when it did; the same
-fault on a later generation is real. And `system prompt honoured: False` on the `/debug/generate` row
+is the model runtime's known flake — the script retries it once itself and prints when it did, including
+`first-generation RPC retry: N` at the end; the same fault on a later generation is real. And `system prompt honoured: False` on the `/debug/generate` row
 is D45: only the bare debug path ignores it.
 
 **Never send more than ~40,000 characters of system text to Phi Silica (D94, issue #29).** At 44,000
@@ -478,8 +474,10 @@ a memory and `docs/DECISIONS.md` disagree, the decision record wins and the memo
 
 `.serena/` is gitignored: the project config is per-machine and the language-server cache is large.
 If the server fails to connect, the cause on this machine is the interpreter, not serena — uv picks a
-Python that PyYAML ships no wheel for and the source build then wants MSVC. The plugin's `.mcp.json`
-pins `--python 3.12` for that reason.
+Python that PyYAML ships no wheel for and the source build then wants MSVC. The pin lives in the user settings (`~/.claude/settings.json`,
+  `env.UV_PYTHON = "3.12"`), not in the plugin's `.mcp.json`: a plugin update rewrote that file on
+  2026-09-13 and dropped the `--python 3.12` it used to carry, which is what broke the connection for
+  two sessions.
 
 ## Working method for this repo
 

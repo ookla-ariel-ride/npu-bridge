@@ -1,28 +1,11 @@
 # Active Context: npu-bridge
 
-_Last updated: 2026-09-13 (morning, local), after the second Sidequest wave, `leftovers`, took issues
-#19, #22, #25, #26, #34 and #35 (D100 to D102) onto `wave/leftovers`. **All eight chunks of
-`docs/PLAN.md` are built and merged; the plan is complete.** Work is GitHub issues, run as board waves
-on `wave/<name>` branches that ship as pull requests; `docs/SESSION-HANDOFF.md` has the wave's state
-and what it taught._
+_Last updated: 2026-09-15 (local afternoon), after the smoke wave reached `edaf254`. PR #37 merged as `8e9444e`; **all eight chunks of `docs/PLAN.md` are built and merged; the plan is complete.** Work is GitHub issues, run as board waves on `wave/<name>` branches that ship as pull requests; `docs/SESSION-HANDOFF.md` has the wave's state and what it taught._
 
 ## Where we are
-`main` is `0733868`, equal to `origin/main`, unchanged since the last handoff. `wave/leftovers` holds
-the wave: ten board candidates and their ten merge commits, then the docs commit `930f0de` (D100 to
-D102, FUTURE, CLAUDE.md, the handoff), then the memory-bank and README commits of this pass. 980 tests
-pass (the board's integration gate on `f1d3b8b`); the solution builds with no warnings. The branch is
-pushed and its pull request carries the six `closes` lines; the merge is on GitHub.
+`main` and `origin/main` are `8e9444e` after PR #37 merged. `wave/smoke` is `edaf254`, 19 commits over `main`, unpushed and unmerged; the board's `integrationBranch` is still `wave/smoke`. 980 tests remain the last recorded full-suite result from `f1d3b8b`; the smoke branch's last clean hardware run had 41 steps, 34 pass, 0 fail, 0 skip and 7 informational, with the JSON verdict `pass` and the full commit hash.
 
-**The last clean hardware smoke was on `3c97d48`** (2026-09-13, 05:47 local; all steps, 0 skipped, 6
-informational, final health `ok`). Three earlier runs the same wave: the baseline on `0733868`
-(21:02 the evening before), `3631444` with `-ToolProbeRuns 20` (20/20 called the tool, the issue #22
-definition of done), and `25dda87` (06:17), which passed every step including the restored
-token-window guard probe (20,000 characters measured at 5,001 tokens, refused before
-`CreateContext`) except `queue-full`, which failed on a 5-second `/healthz` client timeout inside the
-aux-server readiness loop. That loop catches only `HttpRequestException`; a slow health answer during
-model load escapes it. Pre-existing (no wave commit touches those lines), filed as board ticket SQ-30,
-not dispatched because the board MCP disconnected mid-session. The last two code merges (`008ce6f`,
-`f1d3b8b`) have not been smoke-run; the next session runs the smoke after SQ-30 lands.
+**The last clean hardware smoke was on `edaf254`** (2026-09-15): 41 steps, 34 pass, 0 fail, 0 skip and 7 informational, final health `ok`, with the identical 26-pin baseline recorded in the handoff. The D80 cross-check reported 3,581 tokens and the first-generation retry count was 0. The earlier clean run on `3c429ab` had the same counts and pins line.
 
 Chunk 6, the Aion Instruct Preview adapter, is merged but code-verified only: build 29648 never appends
 `WIN://SYSAPPID` for a main-package dynamic dependency, so the Qualcomm QNN provider cannot be
@@ -70,10 +53,7 @@ Every code candidate was reviewed by a different model family than wrote it.
   the tracked region; the smoke's final-health read tolerates 503 again.
 
 ## Open threads
-No chunk is outstanding. Ten issues stay open once the PR merges.
-
-- **SQ-30** (smoke readiness loops) is filed on the board and waits for a dispatch; then one more
-  smoke on the branch tip.
+No chunk is outstanding. The smoke wave is complete on `wave/smoke`; its PR and post-merge cleanup remain.
 - **Next wave candidates:** #24 and #17 (scheduler and `/healthz`, both reshaped by this wave), #27
   and #28 (the streaming drain), #33 (a ruling first: tell the model to answer in prose when no tool
   applies, measure with the probe, then decide whether to strip an empty fence).
@@ -91,12 +71,10 @@ No chunk is outstanding. Ten issues stay open once the PR merges.
   plugin's missing `windows_arm64` Collector archive (`techContext.md`).
 
 ## How to resume
-1. Read `CLAUDE.md`, then `docs/SESSION-HANDOFF.md`, then `docs/DECISIONS.md` D100 to D102.
-2. If the PR is merged: `git switch main && git pull`, repoint the board's `integrationBranch` to
-   `main`, then update this file's "Where we are" and the status paragraph in `CLAUDE.md`.
+1. Read `CLAUDE.md`, then `docs/SESSION-HANDOFF.md`, then `docs/DECISIONS.md` D100 to D103.
+2. Push `wave/smoke`, open and merge its PR, then run `git switch main && git pull` and repoint the board's `integrationBranch` to `main`.
 3. `dotnet build; dotnet test` (expect 980). Do not build while a smoke server is running.
-4. `/reload-plugins` if the board MCP is down, dispatch SQ-30, integrate it, run
-   `scripts/smoke.ps1 -Backend phi-silica`; the queue-full step is the one to watch.
+4. Resolve the still-undecided #33 ruling and report the serena concurrent-worktree defect to Eigenwise/eigenwise-toolshed.
 5. Cut the next wave from `main`: one ticket per logical change (not per issue when an issue mixes a
    refactor with a behaviour change), `worktreeBase: local-main`, verify fields as one command or an
    `&&` chain, a cross-family review bound to every code candidate before it integrates, and the
