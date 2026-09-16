@@ -23,10 +23,22 @@ land here instead of widening the chunk. Each entry says where it came from and 
 - **LoRA adapters** (`LanguageModelOptions.LowRankAdapter`).
 - **Multiple model ids per process** (e.g. serve both backends at once, one model each).
 - **Aion 1.0 Plan backend.** Announced at Build 2026 (2026-06-02): 14B parameters, 32K context, native
-  tool calling and reasoning, "in-box on capable devices in the coming months" (a secondary source says
-  2026-11-24). No SDK or preview package exists as of 2026-09-10; the sample repo's release is Aion
-  Instruct only. When it lands it needs a `ToolCalling` capability that bypasses chunk 7's emulation and
-  a per-backend context-window hint. Tracked as a GitHub issue.
+  tool calling and reasoning, "in-box on capable devices in the coming months". On 2026-09-15, a secondary
+  WindowsForum report described October 1 as the first sideloadable Aion Instruct testing package, October 23
+  as an Insider rollout under a Controlled Feature Rollout with a registry override whose path and velocity
+  key remain unpublished, and November 24 as the retail date with Phi Silica removed. The July open-weights
+  release was not visible through the Hugging Face API, and no SDK or preview package exists; the sample
+  repository still has only Aion Instruct v1.0.0.0. The October 1 package is the first date this machine can
+  run an Aion generation, but it is unknown whether it will use the in-box workload host and avoid D70 or
+  use Windows ML. When it lands, the model needs a ToolCalling capability that bypasses chunk 7's emulation
+  and a per-backend context-window hint. Tracked as a GitHub issue.
+
+## 2026-09-15 smoke wave deferrals
+
+- **F3: existing local settings skip the cache assertion.** The gap came from the whole-branch review's F3 finding on smoke.ps1: the guard correctly avoids overwriting the LAF token file, but the step skips checking context_cache_capacity when appsettings.local.json already exists. It waits because the current hardware run had no existing file and proved the write branch. The reviewer's proposed fix is to read the existing file, use its ContextCacheSize or the default 4, and assert the reported capacity without writing.
+- **F5: identity-step teardown can mask the assertion.** The review's F5 finding showed that a throw in the identity step's finally can replace the real failure, while an unguarded stop has the same narrow race as F4. It waits because the dedicated teardown row already records Stop-AuxServer outcomes and the hardware run did not hit the masking path. The reviewer's proposed fix is to record teardown as its own result instead of throwing from finally.
+- **F7: relative JSON output resolves against the process directory.** The review's F7 finding showed that -JsonOut uses Environment.CurrentDirectory, so a relative path can land elsewhere and a missing directory can terminate the script before its verdict line. It waits because documented examples use absolute paths and the current run wrote a valid summary. The reviewer's proposed fix is to resolve the provider path explicitly and catch write failures so the verdict still prints.
+- **F8: the help check can match prose.** The review's F8 finding showed that the --help assertion searches for bare verbs and can pass when only descriptive prose contains them. It waits because the current executable's help output passed and the issue is a narrow false-positive guard. The reviewer's proposed fix is to anchor the match to npu-bridge service or npu-bridge task usage lines.
 
 ## Chunk 8 deferrals (concurrency scheduler and `/v1/completions`)
 

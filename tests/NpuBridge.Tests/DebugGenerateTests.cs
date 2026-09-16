@@ -196,26 +196,36 @@ public class DebugGenerateTests
     [Fact]
     public async Task Client_disconnect_cancels_and_disposes_the_context()
     {
+        var capture = new CapturingLoggerProvider();
+        var deltaGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var fake = new FakeBackend(new FakeBackendOptions
         {
             Responder = _ => Enumerable.Repeat("tok ", 200),
-            TokenDelay = TimeSpan.FromMilliseconds(20),
+            DeltaGate = deltaGate,
         });
-        await using var host = await BridgeTestHost.StartAsync(fake);
+        await using var host = await BridgeTestHost.StartAsync(fake, loggerProvider: capture);
 
-        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(150));
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
-            host.Client.PostAsJsonAsync("/debug/generate", new { prompt = "x" }, cts.Token));
+        using var cts = new CancellationTokenSource();
+        var post = host.Client.PostAsJsonAsync("/debug/generate", new { prompt = "x" }, cts.Token);
 
-        // The server-side generation observes RequestAborted, returns Cancelled, and the context is disposed.
-        var deadline = DateTime.UtcNow.AddSeconds(5);
-        while (fake.ActiveContexts != 0 && DateTime.UtcNow < deadline)
+        await TestWait.UntilAsync(() => fake.DeltasEmitted == 1);
+        await cts.CancelAsync();
+        try
         {
-            await Task.Delay(20);
+            await TestWait.UntilAsync(() => fake.CancellationsObserved == 1);
+        }
+        finally
+        {
+            deltaGate.SetResult();
         }
 
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => post);
+
+        await TestWait.UntilAsync(() => fake.ActiveContexts == 0);
         Assert.Equal(0, fake.ActiveContexts);
         Assert.Single(fake.Calls);
+        Assert.DoesNotContain(capture.Records, r => r.Level >= LogLevel.Error);
+        host.AssertNoLeak();
     }
 
     /// <summary>Initializes fine but every CreateContext throws, to exercise the endpoint's error path.</summary>
