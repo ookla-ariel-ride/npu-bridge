@@ -20,7 +20,12 @@ section used to duplicate actually lives; `docs/SESSION-HANDOFF.md` carries the 
 what to do next; `docs/FUTURE.md` holds deferred work. Read the handoff first; update DECISIONS and
 FUTURE whenever work changes a choice or defers something.
 
-Current state: `main` is `8e9444e` after PR #37 merged on 2026-09-15. 980 tests pass (last recorded on `f1d3b8b`, 2026-09-13). `wave/smoke` is at `edaf254`, holds the smoke wave, and is not yet pushed or merged; the board still uses it as `integrationBranch`. The last clean hardware smoke ran on `edaf254` with 41 steps, 0 skipped and 7 informational; the D80 cross-check still matched `context_window_tokens` 3581. The repository is `ookla-ariel-ride/npu-bridge`.
+Current state: `main` is `9ebca06`, the merge of PR #38 (the `smoke` wave, D103) on 2026-09-16, on top of
+PR #37 (the `leftovers` wave, D100 to D102) merged 2026-09-15. 980 tests pass; CI ran them on PR #38
+(`Passed: 980, Failed: 0, Skipped: 0`). The last clean hardware smoke ran on `edaf254`, the wave's last
+code commit: 41 steps, 34 pass, 0 skipped, 7 informational, `first-generation RPC retry: 0`, and the
+D80 cross-check matched `context_window_tokens` 3581. The board's `integrationBranch` is `main`; no
+wave is open. The repository is `ookla-ariel-ride/npu-bridge`.
 
 Standing facts that will cost you a session if you do not know them:
 
@@ -33,18 +38,21 @@ Standing facts that will cost you a session if you do not know them:
   invalidates it; re-run `.\scripts\identity.ps1 -Install` before the next `--backend phi-silica` run.
   `identity.ps1 -Status` will not reveal this — the symptom is a relaunch failing with
   "registered for \<other folder\>".
-- **Build 29661 broke Phi Silica and was rolled back to 29648.** If the Insider flight is offered
-  again, expect the same (workload packages fail to register, model `NotReady`).
+- **Build 29661 broke Phi Silica and was rolled back to 29648.** The machine has since taken Dev
+  build **29667** (`BuildLabEx 29667.1000.arm64fre.rs_prerelease.260905-1914`, noticed 2026-09-16), and
+  Phi Silica passed two full smoke runs on it that day. The D70 Aion blocker was measured on 29648 and
+  has not been re-checked on 29667; that re-check is a `--backend aion` start and one `/healthz` read.
 - **An empty `Get-AppxPackage -Name 'WindowsWorkload.LanguageModel*'` listing is not proof of
-  breakage** on 29648. `/healthz` is the check.
+  breakage.** `/healthz` is the check.
 - **A real agent client does not fit.** Measured 2026-09-12 (D93): a terminal agent's tool schemas
   alone are nearly 3 times the 3,581-token window and its whole fixed prompt 3 to 7 times, so an agent must have its toolset cut down before it
   can use this bridge at all. Compliance below that boundary is near-perfect; the window is the
   constraint, not the model's protocol discipline.
 
-Open issues carry the rest: the `leftovers` wave is merged as PR #37; the `smoke` wave (#15's items and #14's
-gated tests) is on `wave/smoke` awaiting its PR; #24, #27 and #28 remain from chunk 8; #33 (an empty
-`tool_calls` fence delivered as content) still needs a ruling; #2, #11, #14 to #17 are longer-running.
+Open issues carry the rest: #24, #27 and #28 remain from chunk 8; #33 (an empty `tool_calls` fence
+delivered as content) still needs a ruling; #15 stays open for its item 7 (the LAN `--listen` step) and
+the manual checklist, after PR #38 closed it by accident (the body said "does not close #15", and
+GitHub reads that as a closing keyword) and it was reopened; #2, #11, #14, #16 and #17 are longer-running.
 
 ## Machine reality
 

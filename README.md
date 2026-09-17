@@ -23,9 +23,12 @@ answers before the request can reach the model.
 | `fake` | in-process, deterministic | for tests and dry runs |
 | `aion` | `AionInstructPreview.Text` (Aion 1.0 Instruct preview SDK) | adapter built and unit-tested, never run: on the current Insider build Windows will not let a plain process load the Qualcomm execution provider the SDK needs (`docs/DECISIONS.md` D70). `/healthz` reports the failure |
 
-Aion 1.0 Instruct, Microsoft's Phi Silica replacement, ships in October and November 2026 as a model
-swap behind the same `Microsoft.Windows.AI.Text` API, so the `phi-silica` backend is the path that will
-serve it. The preview SDK adapter is a stopgap. Aion 1.0 Plan, the 14B reasoning model with a 32K
+Aion 1.0 Instruct, Microsoft's Phi Silica replacement, ships from October 2026 as a model swap behind
+the same `Microsoft.Windows.AI.Text` API, so the `phi-silica` backend is the path that will serve it.
+Microsoft's own page says a sideloadable test package early in October, an Insider rollout during
+October behind a feature-rollout switch with a registry override, and retail in November with Phi
+Silica removed; a report of the internal transition plan puts those at October 1, October 23 and
+November 24. The preview SDK adapter is a stopgap. Aion 1.0 Plan, the 14B reasoning model with a 32K
 window and native tool calling, is a separate model with no SDK yet; a GitHub issue tracks it until
 one exists.
 
@@ -98,18 +101,20 @@ and it streams over server-sent events like any other OpenAI provider. `docs/CLI
 OpenCode and Hermes the same way, plus the wire-level traps a client author should know about before
 relying on this bridge.
 
-`scripts/smoke.ps1 -Backend phi-silica` checks the whole surface against the hardware in five to
-ten minutes: health with identity, both response shapes, the cut, the context cache, the overflow
-refusal and `--truncate-history` on a second server, the system-text guard with a 32,000-character
-text whose token count is proved offline first, the tokenizer against the model's own prompt limit
-and against the window the bridge reports, a tool-call probe over N runs (`-ToolProbeRuns`, five by default), two concurrent requests
-queueing behind one another, a full queue answering 429 on a server started with capacity 1,
-`/v1/completions` on both shapes, the port-in-use and identity failure paths, local configuration and
-NPU_BRIDGE_* re-expression on a real start, the small model and embeddings routes, `--help` and
-`--version`, the chat-path system-prompt and content-filter checks, and the once-only first-generation
-RPC retry. It writes an optional UTF-8 JSON summary with `-JsonOut <path>`, then checks that the
-relaunched child process exited and the port is free and prints the final generation health. It starts
-and tears down five helper servers along the way, each with its own pass or fail row. Re-run
+`scripts/smoke.ps1 -Backend phi-silica` checks the whole surface against the hardware in a few
+minutes. It covers health with identity, both response shapes, the cut, the context cache, the
+overflow refusal and `--truncate-history` on a second server, and the system-text guard with a
+32,000-character text whose token count is proved offline first. It checks the tokenizer against the
+model's own prompt limit and against the window the bridge reports, runs the tool-call probe
+(`-ToolProbeRuns`, five by default), and queues two concurrent requests behind one another before a
+server started with capacity 1 answers 429 to a full queue. It also exercises `/v1/completions` on
+both shapes, the port-in-use and missing-identity failure paths, a real `appsettings.local.json` and
+an `NPU_BRIDGE_*` variable reaching a server started through package activation, the model and
+embeddings routes, `--help` and `--version`, the system prompt on the chat path, and a content-filter
+measurement. The known first-generation RPC flake is retried once and reported at the end. Every step
+names the decisions it pins, and `-JsonOut <path>` writes a UTF-8 summary of the run with the commit
+hash. The script starts and tears down five helper servers along the way, each with its own pass or
+fail row, and finishes by checking that the relaunched child exited and the port is free. Re-run
 `identity.ps1 -Install` whenever the build output folder or the manifest changes, which includes moving
 or renaming the clone.
 
@@ -295,14 +300,14 @@ guessed. Across 114 generations on Phi Silica (tool counts from 1 to 25, flat an
 agent system prompts up to 1,501 tokens, and tool blocks filling half to 85 % of the context window)
 arguments parsed as valid JSON in every call that checked them, the values were right wherever the
 model picked the right tool, no prose-wrapped protocol reached a client, and the bridge produced no
-malformed reply. One exception worth stating plainly: in a run using stochastic sampling, three
-generations called a tool name that was never offered (`weather` for `get_weather`). It did not
-recur under deterministic decoding, but it is the failure a client acts on by *running* the call, so
-a client should reject unknown names rather than assume they cannot happen. An earlier run also
-suggested accuracy sagged as the window filled; it did not reproduce once the sweep was rerun with
-deterministic decoding and the position control the other dimensions use (`docs/DECISIONS.md` D96).
+malformed reply. The one exception: in a run using stochastic sampling, three generations called a
+tool name that was never offered (`weather` for `get_weather`). It did not recur under deterministic
+decoding, but it is the failure a client acts on by *running* the call, so a client should reject
+unknown names. An earlier run also suggested accuracy sagged as the window filled; it did not
+reproduce once the sweep was rerun with deterministic decoding and the position control the other
+dimensions use (`docs/DECISIONS.md` D96).
 
-The limit is not the model's protocol discipline. It is the window. A real agent's tool schemas are
+The window is the limit. A real agent's tool schemas are
 larger than everything Phi Silica can hold: one terminal agent measured here sends about 37 KB of
 tool JSON for its 25 tools, against a 3,581-token window, so it cannot run until its toolset is cut
 down. Restricted to a single toolset, the same agent works. Offer a handful of tools and this is
@@ -310,9 +315,9 @@ reliable; offer an agent framework's whole toolbox and the conversation will not
 `docs/CLIENTS.md` has the measured table, and `--tool-emulation off` turns the feature off for the
 process, `tool_choice: "none"` for one request.
 
-One safety note for anyone probing these limits. A system prompt much over 40,000 characters does not
-merely overflow: it crashes the Windows model host and leaves the NPU unusable for the whole machine
-for several minutes (`docs/DECISIONS.md` D94, issue #29). The bridge refuses before that can happen.
+A safety note for anyone probing these limits. A system prompt much over 40,000 characters crashes
+the Windows model host and leaves the NPU unusable for the whole machine for several minutes
+(`docs/DECISIONS.md` D94, issue #29). The bridge refuses before that can happen.
 System text delivered to the model natively is answered 400 `context_length_exceeded` when its token
 count reaches the window or its length exceeds 32,000 characters, before any backend call and before
 a queue slot is taken, and the Phi Silica adapter refuses the same ceiling for anything that calls it
@@ -351,7 +356,9 @@ backend, so they need no NPU.
 
 ## Things that will surprise you
 
-**The process relaunches itself.** Windows grants package identity only when it activates an app
+### The process relaunches itself
+
+Windows grants package identity only when it activates an app
 through its package, and Phi Silica refuses to load without it. So the bridge relaunches through
 activation and supervises the child, forwarding its exit code and stopping it on Ctrl+C. From outside
 it behaves like one process. Activation inherits no environment, so a secret set only in your shell
@@ -364,24 +371,32 @@ flowchart LR
     C --> M["Phi Silica runtime<br/>Microsoft.Windows.AI.Text on the NPU"]
 ```
 
-**Package identity is tied to the folder you built in.** The registration points at the build output
+### Package identity is tied to the folder you built in
+
+The registration points at the build output
 path, so moving or renaming the clone breaks it and Phi Silica refuses to start, saying it is
 registered for another folder. Re-run `scripts/identity.ps1 -Install` and it works again. `-Status`
 will not warn you beforehand: it reports the registration as healthy either way, because the path it
 prints is the one inside `WindowsApps` rather than the build path that went stale.
 
-**Auto-start differs by backend.** A Windows service is launched by path and so cannot hold identity.
+### Auto-start differs by backend
+
+A Windows service is launched by path and so cannot hold identity.
 Phi Silica uses a logon task (`NpuBridge.exe task install`, elevated); aion and fake use a service
 (`NpuBridge.exe service install`).
 
-**Phi Silica is unreliable about saying a prompt is too long.** A prompt far over the window fails
+### Phi Silica is unreliable about saying a prompt is too long
+
+A prompt far over the window fails
 generically after about 26 seconds; one moderately over gets a proper "too long" status in about
 half a second. The 400 you get comes from asking the model's prompt-length preflight before
 generating, which is why it arrives in milliseconds either way. A backend without that preflight
 (the Aion preview SDK) can only say so by failing the generation, and with `--truncate-history` the
 bridge retries after that failure too.
 
-**Token counts are real on Phi Silica and estimates elsewhere.** The SDK exposes no tokenizer, so the
+### Token counts are real on Phi Silica and estimates elsewhere
+
+The SDK exposes no tokenizer, so the
 bridge ships Phi-3.5-mini's. What justifies that is a measurement: fourteen texts of very different
 character were fed to the model until it refused, and the point where it refused came out at the same
 token count each time, whether the text was English, digits, code, JSON, Chinese or emoji. `usage`
@@ -389,18 +404,24 @@ and the `max_tokens` budget are counted with it, and `POST /debug/tokenize` will
 give it. The Aion preview adapter and the fake backend divide characters by four instead. On a cache
 hit `prompt_tokens` still counts the whole conversation, including the turns that were not sent.
 
-**Only one request generates at a time.** There is one model handle, so everything that touches it
+### Only one request generates at a time
+
+There is one model handle, so everything that touches it
 queues: the generation, and also the cache lookup and the prompt-length preflight, which are calls on
 the same handle. Four requests may wait by default. The next one is refused with 429 rather than
 blocked, so a client is never left holding a connection open for a slot that may never come. Checked
 on the NPU: two requests sent at once queued and both answered, and a server started with
 `--queue-capacity 1` admitted one and refused the next two.
 
-**System prompts work because of the rendering.** The same instruction is ignored when sent bare
+### System prompts work because of the rendering
+
+The same instruction is ignored when sent bare
 through `/debug/generate` and obeyed when it arrives inside the rendered transcript. Use the
 diagnostic endpoint to learn about the raw model, and the chat endpoint to learn about this API.
 
-**The model runtime can wedge.** Three times so far a Phi Silica process has reached a state where
+### The model runtime can wedge
+
+Three times so far a Phi Silica process has reached a state where
 every generation fails within milliseconds with `The RPC server is unavailable`: twice after a first
 generation, once from the very first call of a freshly started bridge with no crash and no oversized
 prompt anywhere near it. Windows logs nothing for that kind. Two of the three cleared on their own
@@ -433,8 +454,8 @@ tests/NpuBridge.Tests/     xunit against the fake backend through TestServer
 packaging/                 AppxManifest.xml for the sparse package; BuildTools.proj
 scripts/                   identity.ps1 (package identity), smoke.ps1 (the hardware run), tool-probe.ps1 (the
                            tool-call measurement, with -Stream and an offline -SelfTest)
-docs/                      PLAN.md, DECISIONS.md, FUTURE.md, SESSION-HANDOFF.md, CLIENTS.md, and the
-                           Windows ARM64 workaround notes for OpenCode and the Grok CLI
+docs/                      PLAN.md (the design), DECISIONS.md (D1 to D103), FUTURE.md, SESSION-HANDOFF.md,
+                           CLIENTS.md (per-client settings and wire-level traps)
 memory-bank/               project notes kept for the next session
 nuget-local/               where the Aion SDK nupkg goes (gitignored; the adapter compiles only when it is present)
 .githooks/, .github/       the gitleaks pre-commit hook; the build-and-test and secret-scan workflows

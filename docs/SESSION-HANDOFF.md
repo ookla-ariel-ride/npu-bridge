@@ -1,27 +1,60 @@
-# Session handoff, 2026-09-15 (local afternoon): PR #37 merged, and the smoke wave is ready for its PR
+# Session handoff, 2026-09-16: both waves merged, `main` is `9ebca06`, no wave open
 
-Supersedes the 2026-09-13 handoff. The leftovers wave merged, the smoke wave ran through review and its fix round, and the branch is ready for delivery.
+Supersedes the 2026-09-15 handoff. One session merged PR #37 (`leftovers`), ran the smoke wave through
+its whole-branch review, fix round and two hardware runs, merged it as PR #38, and closed out the board.
 
 ## State
 
-- main and origin/main are 8e9444e; PR #37 merged on 2026-09-15 and closed #19, #22, #25, #26, #34 and #35.
-- wave/smoke is edaf254, 19 commits over main, unpushed and unmerged. The board's integrationBranch is still wave/smoke.
-- The last clean hardware smoke ran on edaf254: 41 steps, 34 pass, 0 fail, 0 skip and 7 informational; first-generation RPC retry: 0; the JSON verdict was pass, with 26 pins and the full commit hash. The pins baseline was #15 D16 D24 D37 D38 D44 D45 D50 D51 D52 D53 D55 D66 D67 D69 D71 D72 D73 D77 D79 D80 D83 D84 D87 D91 D97. The earlier clean run on 3c429ab had the same counts and pins line.
-- The D80 cross-check reported 3,581 Phi-3 tokens. The three chat assertions returned PONG, truncation dropped four turns, both completion shapes returned PONG, and no local settings file remained beside the executable.
-- SQ-39's whole-branch review found eleven findings against 3c429ab; SQ-40 fixed F1, F2, F4, F6 and the script half of F11 as b14a2c3. F3, F5, F7 and F8 went to FUTURE, F9 remains a recorded retry-shape assumption, and F10 was superseded by the hardware run. D103 records the rulings and the baseline.
-- 980 tests remain the last recorded full-suite result from f1d3b8b; the SQ-40 gate ran the build and fake smoke.
+- `main` and `origin/main` are `9ebca06` (PR #38, merged 2026-09-16). PR #37 merged the day before as
+  `8e9444e` and closed #19, #22, #25, #26, #34 and #35. The board's `integrationBranch` is `main`,
+  `worktreeBase` is `local-main`, and every ticket (SQ-1 to SQ-41) is done.
+- 980 tests. CI ran them on PR #38: `Passed: 980, Failed: 0, Skipped: 0, Total: 980`.
+- The last clean hardware smoke ran on `edaf254`, the wave's last code commit, 2026-09-15:
+  `All steps passed (0 skipped, 7 informational)`, `first-generation RPC retry: 0`, 41 steps, 34 pass.
+  Pins baseline: `#15 D16 D24 D37 D38 D44 D45 D50 D51 D52 D53 D55 D66 D67 D69 D71 D72 D73 D77 D79 D80
+  D83 D84 D87 D91 D97`. The JSON summary carries the full commit hash. The run on `3c429ab` earlier
+  that day had the same counts and pins line. D103 has the wave's rulings.
+- PR #38 closed #15 by accident: its body said "this PR does not close #15" and GitHub reads that as a
+  closing keyword. #15 was reopened the same minute with an explanation, then given its landing
+  comment. It stays open for item 7 (the LAN `--listen` step raises the Windows Firewall prompt) and
+  the manual checklist. #14 has a comment for the gated disconnect tests; the rest of its list is open.
+- The machine is on Dev build 29667 (`260905-1914`), not the 29648 the older docs name. Phi Silica
+  passed both smoke runs on it. The D70 Aion blocker was measured on 29648 and has not been re-checked
+  here; the re-check is a `--backend aion` start and one `/healthz` read.
+- Serena works again. A plugin update on 2026-09-13 rewrote the serena plugin's `.mcp.json` and dropped
+  its `--python 3.12`; the pin now lives in `~/.claude/settings.json` as `env.UV_PYTHON = "3.12"`.
+- Toolshed: sidequest 5.1.22, quartermaster 0.11.1, observability 0.7.32, model-gateway 0.51.2, all
+  updated between waves. The hand-placed amd64 Collector binary survived the observability bump.
 
-## What the smoke wave taught
+## What this session taught
 
-- A whole-branch review filed after integration binds to the commit hash under review rather than to an already-integrated candidate.
-- The serena plugin-update trap removed its Python pin from .mcp.json; the working pin now lives in user settings as UV_PYTHON=3.12.
-- The hardware run was the oracle for the hard F2 model-output assertion: all three sites returned PONG, so punctuation was tolerated while the assertion stayed hard.
-- The Sidequest CLI reported no tickets while the MCP listed 36; the MCP was authoritative.
+- A whole-branch review filed after the candidates are integrated binds to a commit hash, not to a
+  candidate; file it before integrating next time, or against the hash.
+- Two findings reversed on evidence: the review's proposal to demote the chat-path system-prompt step
+  to informational lost to the hardware run, which returned exactly `PONG` at all three sites, so the
+  assertion stayed hard and gained punctuation tolerance instead (F2, D103). The review's F3 premise
+  (an existing `appsettings.local.json` beside the exe) does not hold on this machine: the step wrote
+  and removed the file.
+- In a PR body, never put a closing verb directly before an issue number unless the merge should
+  close it. Write "leaves #15 open".
+- The board CLI's `list` said "No tickets" while the MCP listed 36; the MCP is the authority.
+- A GPT executor writes a serviceable docs commit from a brief that carries every fact; it still needs
+  a prose pass afterwards (this handoff's predecessor read like a ticket).
 
 ## Do this next
 
-1. Push wave/smoke and open its PR against main. Include a reference to issue #15 without closes #15, because the LAN-address --listen step remains deferred.
-2. Let CI run, merge the PR, run git switch main && git pull, and repoint the board's integrationBranch to main.
-3. Post sanitized landing comments on #15 and #14.
-4. Resolve the still-undecided #33 ruling and report the serena concurrent-worktree defect to Eigenwise/eigenwise-toolshed.
-5. Treat the October 1 sideloadable Aion Instruct package as the next hardware event; its runtime path remains unknown until it lands.
+1. `git switch main && git pull`; `dotnet build; dotnet test` (expect 980).
+2. Optional and cheap: `--backend aion` on build 29667, read `/healthz`, and record the outcome on
+   issue #2 either way. Do not go further than that one read if it still fails (D70).
+3. Rule on #33 (tell the model to answer in prose when no tool applies, measure with
+   `tool-probe.ps1`, then decide whether to strip an empty fence).
+4. Report the serena concurrent-worktree defect on Eigenwise/eigenwise-toolshed; it is still the reason
+   executors in Sidequest worktrees must not use serena's tools.
+5. Next wave candidates: #24 and #17 (scheduler and `/healthz`), #27 and #28 (the streaming drain),
+   #15 item 7, #14 and #16 (coverage). Cut `wave/<name>` from `main`, set `integrationBranch`, one
+   ticket per logical change, a bound cross-family review on every code candidate before it
+   integrates, and the whole-branch review before the PR.
+6. October 1 is the first date an Aion Instruct package can run on this machine. When it lands, the
+   work is a `--backend phi-silica` smoke under the registry override, a re-measure of the usable
+   window and of `GetUsablePromptLength`, and a note on whether the package goes through the in-box
+   workload host or Windows ML.
