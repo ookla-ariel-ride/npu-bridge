@@ -273,7 +273,7 @@ internal sealed class ChatCompletionsStreamEndpoint
             // Nothing has been written yet, on purpose. Waiting here — rather than opening with the
             // role chunk — is what keeps the status line available for a failure that arrives before
             // the first token. The first keep-alive comment is what ends that window, about a second in.
-            streamed = await StreamingPipeline.WaitForFirstDeltaAsync(sse, channel.Reader, streaming, aborted)
+            streamed = await StreamingPipeline.WaitForFirstDeltaAsync(sse, channel.Reader, streaming, time, aborted)
                 .ConfigureAwait(false);
 
             GenerationResult result;
@@ -283,7 +283,7 @@ internal sealed class ChatCompletionsStreamEndpoint
                 // still decides the cut, so a tool-call reply is capped and stopped exactly as a
                 // streamed one is; what it releases is accumulated rather than written, and read
                 // from EmittedText in the tail.
-                if (await DrainBufferedAsync(sse, channel.Reader, cutter, streaming,
+                if (await DrainBufferedAsync(sse, channel.Reader, cutter, streaming, time,
                         () => currentGenerationCts!, logger, requestId, aborted).ConfigureAwait(false))
                 {
                     cancelledByCut = true;
@@ -649,6 +649,7 @@ internal sealed class ChatCompletionsStreamEndpoint
         ChannelReader<string> reader,
         OutputCutter cutter,
         StreamingOptions streaming,
+        TimeProvider time,
         Func<CancellationTokenSource> currentGenerationCts,
         ILogger logger,
         string requestId,
@@ -706,7 +707,7 @@ internal sealed class ChatCompletionsStreamEndpoint
 
             // WaitForDeltaAsync writes its own keep-alive if this wait runs the whole way out, so the
             // deadline is reset whenever it does — hence the assignment on both branches.
-            more = await StreamingPipeline.WaitForDeltaAsync(sse, reader, streaming, remaining, cancellationToken).ConfigureAwait(false);
+            more = await StreamingPipeline.WaitForDeltaAsync(sse, reader, streaming, remaining, time, cancellationToken).ConfigureAwait(false);
             if (!more || Stopwatch.GetTimestamp() >= due)
             {
                 due = Stopwatch.GetTimestamp() + (long)(streaming.KeepAliveInterval.TotalSeconds * Stopwatch.Frequency);

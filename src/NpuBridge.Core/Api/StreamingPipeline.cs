@@ -60,12 +60,14 @@ internal static class StreamingPipeline
         SseStream sse,
         ChannelReader<string> reader,
         StreamingOptions streaming,
+        TimeProvider time,
         CancellationToken cancellationToken) =>
         WaitForDeltaAsync(
             sse,
             reader,
             streaming,
             streaming.FirstKeepAliveDelay > TimeSpan.Zero ? streaming.FirstKeepAliveDelay : streaming.KeepAliveInterval,
+            time,
             cancellationToken);
 
     /// <summary>
@@ -78,6 +80,7 @@ internal static class StreamingPipeline
         ChannelReader<string> reader,
         StreamingOptions streaming,
         TimeSpan firstDelay,
+        TimeProvider time,
         CancellationToken cancellationToken)
     {
         var wait = reader.WaitToReadAsync(CancellationToken.None).AsTask();
@@ -97,7 +100,7 @@ internal static class StreamingPipeline
                 // internal promise unregisters itself from `wait` and releases its timer on the timeout
                 // path as well as on completion, so neither continuations nor timers accumulate however
                 // long the model takes to produce its first token.
-                return await wait.WaitAsync(next, cancellationToken).ConfigureAwait(false);
+                return await wait.WaitAsync(next, time, cancellationToken).ConfigureAwait(false);
             }
             catch (TimeoutException)
             {

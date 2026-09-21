@@ -63,7 +63,7 @@ internal sealed class CompletionsStreamEndpoint
         // the last instant before the first frame commits the response, and only while no drop is in
         // progress -- the preflight loop inside Acquire, or the status-driven retry's own
         // TryDropOldestExchange below, both of which clear the flag before the count moves.
-        var sse = new SseStream(http.Response, () => session.ApplyTruncationHeaderIfSettled(http.Response));
+        var sse = new SseStream(http.Response, CreateBeforeHeadersHook(session, http.Response));
         var stopwatch = Stopwatch.StartNew();
 
         // The client-side cut. Runs on the single channel reader, never on the backend's callback
@@ -183,7 +183,7 @@ internal sealed class CompletionsStreamEndpoint
 
             // Nothing has been written yet, on purpose: waiting here is what keeps the status line
             // available for a failure that arrives before the first token.
-            streamed = await StreamingPipeline.WaitForFirstDeltaAsync(sse, channel.Reader, streaming, aborted)
+            streamed = await StreamingPipeline.WaitForFirstDeltaAsync(sse, channel.Reader, streaming, time, aborted)
                 .ConfigureAwait(false);
 
             GenerationResult result;
@@ -364,6 +364,13 @@ internal sealed class CompletionsStreamEndpoint
             Volatile.Read(ref currentGenerationCts)?.Dispose();
         }
     }
+
+    /// <summary>
+    /// The one-time first-frame callback: it must run on the request thread while the response is still
+    /// mutable, because the scheduler worker may be changing the truncation count concurrently.
+    /// </summary>
+    internal static Action CreateBeforeHeadersHook(ConversationSession session, HttpResponse response) =>
+        () => session.ApplyTruncationHeaderIfSettled(response);
 
     /// <summary>
     /// One content-bearing chunk. With <paramref name="nullUsage"/> (the request asked for usage) it

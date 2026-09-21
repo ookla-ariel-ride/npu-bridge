@@ -3,9 +3,14 @@ using System.Globalization;
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using System.Threading.Channels;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Time.Testing;
+using NpuBridge.Api;
 using NpuBridge.Backends;
 using NpuBridge.Backends.Fake;
+using NpuBridge.Configuration;
 
 namespace NpuBridge.Tests;
 
@@ -23,6 +28,44 @@ namespace NpuBridge.Tests;
 public class ChatCompletionsStreamingTests
 {
     private const string Path = "/v1/chat/completions";
+
+    /// <summary>
+    /// The channel completion and the timer are made due on the same fake-clock tick. Completion is
+    /// registered first, so advancing the clock creates the stale-timeout ordering without relying on
+    /// the machine scheduler: the completed channel must win, leaving the response uncommitted for its
+    /// caller to return the ordinary 400.
+    /// </summary>
+    [Fact]
+    public async Task A_completed_wait_beats_a_stale_keep_alive_timeout_without_committing_the_response()
+    {
+        var time = new FakeTimeProvider();
+        var channel = Channel.CreateUnbounded<string>();
+        var due = TimeSpan.FromSeconds(1);
+        using var completeChannel = time.CreateTimer(
+            static state => ((ChannelWriter<string>)state!).TryComplete(),
+            channel.Writer,
+            due,
+            Timeout.InfiniteTimeSpan);
+
+        var http = new DefaultHttpContext();
+        await using var body = new MemoryStream();
+        http.Response.Body = body;
+        var sse = new SseStream(http.Response);
+
+        var wait = StreamingPipeline.WaitForDeltaAsync(
+            sse,
+            channel.Reader,
+            new StreamingOptions { KeepAliveInterval = due, FirstKeepAliveDelay = due },
+            due,
+            time,
+            CancellationToken.None);
+
+        time.Advance(due);
+
+        Assert.False(await wait);
+        Assert.False(sse.Started);
+        Assert.Equal(0, body.Length);
+    }
 
     /// <summary>Long enough to span many deltas and to make an ordering or interleaving bug visible.</summary>
     private static IReadOnlyList<string> LongReply { get; } = FakeBackend.Tokenize(string.Join(
