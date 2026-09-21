@@ -41,6 +41,9 @@ namespace NpuBridge.Api;
 ///   <item>Shutdown stops accepting new work and drains whatever is left in the queue as cancelled
 ///   rather than running it, but still awaits a job already running to its natural end (same D51
 ///   invariant, not suspended for shutdown).</item>
+///   <item><see cref="QueueDepth"/> stays correct only while every job written to the channel is
+///   eventually dequeued. That holds today because the worker loop cannot fault and drains after
+///   <c>TryComplete</c>.</item>
 /// </list>
 /// </remarks>
 public sealed class GenerationScheduler : IHostedService, IAsyncDisposable
@@ -338,7 +341,7 @@ public sealed class GenerationScheduler : IHostedService, IAsyncDisposable
     }
 
     /// <summary>The type-erased half of <see cref="QueuedJob{TResult}"/> the worker loop can hold in one channel regardless of what each caller's operation returns.</summary>
-    private interface IQueuedJob
+    internal interface IQueuedJob
     {
         DateTimeOffset EnqueuedAt { get; }
 
@@ -359,27 +362,26 @@ public sealed class GenerationScheduler : IHostedService, IAsyncDisposable
         Task RunAsync(TimeSpan queueWait);
     }
 
-    private sealed class QueuedJob<TResult> : IQueuedJob
+    /// <summary>
+    /// One scheduled operation and its queue-depth state. Internal so tests can drive the publish-before-arm
+    /// gate without relying on a worker-thread race.
+    /// </summary>
+    internal sealed class QueuedJob<TResult> : IQueuedJob
     {
         private readonly Func<CancellationToken, Task<TResult>> _operation;
         private readonly TimeProvider _time;
         private readonly CancellationToken _cancellationToken;
         private readonly Action _onLeftQueue;
         private CancellationTokenRegistration _cancellationRegistration;
-        private int _dequeued;
 
-        // Fix round 1, Finding 3. Two separate flags, not one: _queueDepthArmed only becomes true after
-        // this job is actually written to the channel (set by MarkEnteredQueue, called right after a
-        // successful TryWrite), so the cancellation callback below -- armed before TryWrite is even
-        // attempted, and able to fire synchronously inline if the caller's token is already cancelled at
-        // the moment ScheduleAsync is called -- cannot decrement a counter this job was never added to.
-        // _queueDepthClaimed is the exactly-once gate once armed: whichever of "cancelled while still
-        // queued" (the callback) or "dequeued" (MarkDequeued) reaches it first is the one that actually
-        // calls _onLeftQueue, mirroring the same race _dequeued already coordinates for who owns
-        // completing the job, but as a separate piece of state so the counter never depends on which of
-        // the two obligations happened to run first.
+        // The arming, dequeue and cancellation signals can arrive in either order: the job is published
+        // before MarkEnteredQueue runs, while cancellation is registered before publication. Once arming
+        // records that this job was counted, either a prior dequeue or a prior queued cancellation retries
+        // the leave. _queueDepthClaimed makes the eventual callback exactly-once.
         private int _queueDepthArmed;
         private int _queueDepthClaimed;
+        private int _dequeued;
+        private int _cancelledWhileQueued;
 
         public QueuedJob(Func<CancellationToken, Task<TResult>> operation, DateTimeOffset enqueuedAt, TimeProvider time, Action onLeftQueue, CancellationToken cancellationToken)
         {
@@ -405,14 +407,11 @@ public sealed class GenerationScheduler : IHostedService, IAsyncDisposable
         /// -- itself calling <see cref="LeaveQueueIfNeeded"/> -- before this thread reaches this call at
         /// all, since <c>TryWrite</c> hands the job to the worker immediately and the worker can dequeue
         /// and even finish running it before the enqueuing thread gets here. When that happens
-        /// <see cref="MarkDequeued"/>'s own <see cref="LeaveQueueIfNeeded"/> call saw
-        /// <see cref="_queueDepthArmed"/> still 0 and returned without decrementing -- and nothing ever
-        /// called it again, so <c>_liveQueueDepth</c> stayed one too high for the rest of the process's
-        /// life. So this checks <see cref="_dequeued"/> after arming and retries the leave itself;
-        /// <see cref="_queueDepthClaimed"/>'s <c>CompareExchange</c> is what keeps the actual decrement
-        /// exactly-once regardless of which of the two calls gets there first, exactly as it already did
-        /// for the callback/<see cref="MarkDequeued"/> race <see cref="_queueDepthArmed"/>'s own comment
-        /// describes.
+        /// <see cref="MarkDequeued"/>'s or the cancellation callback's own <see cref="LeaveQueueIfNeeded"/>
+        /// call can see <see cref="_queueDepthArmed"/> still 0 and return without decrementing. After
+        /// arming, this checks both signals and retries the leave itself; <see cref="_queueDepthClaimed"/>'s
+        /// <c>CompareExchange</c> is what keeps the actual decrement exactly-once regardless of which
+        /// signal gets there first.
         ///
         /// <see cref="Interlocked.Exchange(ref int, int)"/>, not <c>Volatile.Write</c>, on both this and
         /// <see cref="MarkDequeued"/>'s write to <see cref="_dequeued"/>: the two threads write one flag
@@ -425,7 +424,7 @@ public sealed class GenerationScheduler : IHostedService, IAsyncDisposable
         public void MarkEnteredQueue()
         {
             Interlocked.Exchange(ref _queueDepthArmed, 1);
-            if (Volatile.Read(ref _dequeued) != 0)
+            if (Volatile.Read(ref _dequeued) != 0 || Volatile.Read(ref _cancelledWhileQueued) != 0)
             {
                 LeaveQueueIfNeeded();
             }
@@ -491,6 +490,8 @@ public sealed class GenerationScheduler : IHostedService, IAsyncDisposable
                     // what settles it, not this callback.
                     return;
                 }
+
+                Interlocked.Exchange(ref job._cancelledWhileQueued, 1);
 
                 var queueWait = job._time.GetUtcNow() - job.EnqueuedAt;
                 job.Completion.TrySetResult(ScheduleResult.Cancelled<TResult>(queueWait));
