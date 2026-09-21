@@ -2,8 +2,14 @@ using System.Globalization;
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+using NpuBridge.Api;
+using NpuBridge.Backends;
 using NpuBridge.Backends.Fake;
+using NpuBridge.Configuration;
+using NpuBridge.Prompting;
 
 namespace NpuBridge.Tests;
 
@@ -18,6 +24,83 @@ namespace NpuBridge.Tests;
 public class CompletionsStreamingTests
 {
     private const string Path = "/v1/completions";
+
+    /// <summary>
+    /// <c>/v1/completions</c> cannot truncate through its public one-user-turn request shape, so this
+    /// pins the endpoint's exact first-frame hook as a unit: it applies the settled count before the
+    /// first frame, and <see cref="SseStream"/> invokes it once even when the stream writes more frames.
+    /// </summary>
+    [Fact]
+    public async Task The_completions_before_headers_hook_is_applied_once_before_its_first_frame()
+    {
+        var backend = new FakeBackend();
+        await backend.InitializeAsync(CancellationToken.None);
+        var messages = new ChatMessage[]
+        {
+            new("user", ChatMessageContent.FromText("old question"), null, null),
+            new("assistant", ChatMessageContent.FromText("old answer"), null, null),
+            new("user", ChatMessageContent.FromText("new question"), null, null),
+        };
+        var request = new ChatCompletionRequest("fake", messages, true, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
+        var rendered = PromptTemplate.Render(messages, nativeSystemPromptSupported: false);
+        var prepared = new PreparedChatRequest(
+            "test-request",
+            "fake",
+            request,
+            backend,
+            rendered,
+            NativeSystem: null,
+            NativeSystemTokens: 0,
+            Sampling: null,
+            Limits: OutputLimits.None,
+            PromptChars: rendered.Prompt.Length);
+        using var cache = new ContextCache(0);
+        var session = new ConversationSession(prepared, cache, new BridgeOptions { TruncateHistory = true }, NullLogger.Instance);
+
+        Assert.True(session.TryDropOldestExchange());
+        session.Acquire(new BackendCallTracker()).Lease!.Dispose();
+
+        var http = new DefaultHttpContext();
+        await using var body = new MemoryStream();
+        http.Response.Body = body;
+        var hookCalls = 0;
+        var beforeHeaders = CompletionsStreamEndpoint.CreateBeforeHeadersHook(session, http.Response);
+        var sse = new SseStream(http.Response, () =>
+        {
+            hookCalls++;
+            beforeHeaders();
+        });
+
+        await sse.WriteAsync("data: first\n\n", CancellationToken.None);
+        await sse.WriteAsync("data: second\n\n", CancellationToken.None);
+
+        Assert.Equal(1, hookCalls);
+        Assert.Equal("2", http.Response.Headers[ConversationSession.TruncatedTurnsHeader].ToString());
+        Assert.Equal("data: first\n\ndata: second\n\n", System.Text.Encoding.UTF8.GetString(body.ToArray()));
+        Assert.Equal(1, backend.ContextsCreated);
+        Assert.Equal(1, backend.ContextsDisposed);
+    }
+
+    /// <summary>
+    /// The streamed endpoint gets the refusal after scheduler admission but before any SSE frame, so it
+    /// keeps the ordinary HTTP status and OpenAI error envelope instead of committing event-stream.
+    /// </summary>
+    [Fact]
+    public async Task An_over_length_prompt_is_a_plain_json_400_before_the_first_completions_frame()
+    {
+        var fake = new FakeBackend(new FakeBackendOptions { MaxPromptChars = 1 });
+        await using var host = await BridgeTestHost.StartAsync(fake);
+
+        var response = await PostStreamAsync(host);
+        var body = await response.Content.ReadAsStringAsync();
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal("application/json", response.Content.Headers.ContentType?.MediaType);
+        Assert.DoesNotContain("text/event-stream", response.Content.Headers.ContentType?.ToString(), StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("data:", body, StringComparison.Ordinal);
+        Assert.Equal("context_length_exceeded", JsonDocument.Parse(body).RootElement.GetProperty("error").GetProperty("code").GetString());
+        host.AssertNoLeak();
+    }
 
     [Fact]
     public async Task The_response_carries_the_three_streaming_headers()

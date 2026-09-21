@@ -3,9 +3,12 @@ using System.Globalization;
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
+using NpuBridge.Api;
 using NpuBridge.Backends;
 using NpuBridge.Backends.Fake;
+using NpuBridge.Configuration;
 
 namespace NpuBridge.Tests;
 
@@ -942,8 +945,8 @@ public class ChatCompletionsStreamingTests
     /// there instead. The negative row is deterministic. The zero row has one window: the gate is
     /// released once the backend has been called, which happens a few instructions before the handler
     /// enters its wait, so a delta that reached the channel in that gap would let a missing branch
-    /// pass by a first wait that had already been satisfied. Closing it needs the keep-alive delays
-    /// driven by the injected <see cref="TimeProvider"/>, filed rather than done here.
+    /// pass by a first wait that had already been satisfied. Closing it can now use the keep-alive
+    /// delays driven by the injected <see cref="TimeProvider"/>.
     /// </summary>
     [Theory]
     [InlineData(0)]
@@ -983,8 +986,8 @@ public class ChatCompletionsStreamingTests
     /// <c>Task.Delay</c>, and without the fallback the request would fail before its first frame. What
     /// this cannot pin is the delay actually used: the code falls back to the interval, but a fallback
     /// to zero, or to any other non-negative span, would pass these assertions too. Pinning the value
-    /// needs the keep-alive delays driven by the injected <see cref="TimeProvider"/>, which is filed
-    /// rather than done here.
+    /// needs the keep-alive delays driven by the injected <see cref="TimeProvider"/>, which is now
+    /// available.
     /// </summary>
     [Theory]
     [InlineData(0)]
