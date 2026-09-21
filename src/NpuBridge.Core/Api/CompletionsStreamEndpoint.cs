@@ -214,7 +214,7 @@ internal sealed class CompletionsStreamEndpoint
                 if (cancelledByCut)
                 {
                     await GenerationPipeline.DrainWithWarningsAsync(
-                        generation, options.DrainWarningSeconds, time, logger, requestId, "stream").ConfigureAwait(false);
+                        generation, options.DrainWarningSeconds, time, logger, requestId, "completions-stream").ConfigureAwait(false);
                 }
 
                 var schedulerOutcome = await StreamingPipeline.ReportSchedulerOutcomeAsync(
@@ -363,7 +363,7 @@ internal sealed class CompletionsStreamEndpoint
                     else
                     {
                         await GenerationPipeline.DrainWithWarningsAsync(
-                            generation, options.DrainWarningSeconds, time, logger, requestId, "stream").ConfigureAwait(false);
+                            generation, options.DrainWarningSeconds, time, logger, requestId, "completions-stream").ConfigureAwait(false);
                     }
                 }
                 catch (Exception ex)

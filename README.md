@@ -339,6 +339,7 @@ everything.
 | `--queue-capacity <n>` | `4` | requests that may wait for the one worker; one that arrives to a full queue gets 429 `queue_full` and a `Retry-After` |
 | `--truncate-history` | off | drop the oldest exchanges on overflow instead of returning 400 |
 | `--context-window-hint <tokens>` | `4096` | a warning is logged when a conversation reaches nine tenths of it; overflow itself is decided by the model's preflight |
+| `--drain-warning-seconds <n>` | `10` | interval between warnings while a cancelled generation is still draining |
 | `--system-prompt-placement auto\|native\|prompt` | `auto` | deliver the system message through the backend's own context, or fold it into the prompt text |
 | `--tool-emulation on\|off` | on | emulated function calling; `off` makes `tools` and `tool_choice` accepted-and-ignored again |
 | `--tool-schema compact\|full` | `compact` | compact signatures or whole JSON Schema in the injected block; full costs most of the window on a real tool set |

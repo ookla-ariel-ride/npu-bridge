@@ -165,6 +165,7 @@ public class BridgeOptionsBinderTests
     [InlineData("QueueCapacity", "1001")]
     [InlineData("QueueCapacity", "many")]
     [InlineData("ContextCacheSize", "-1")]
+    [InlineData("DrainWarningSeconds", "86401")]
     [InlineData("ContextWindowHint", "10")]
     [InlineData("ToolSchema", "medium")]
     [InlineData("Verbose", "maybe")]
@@ -199,6 +200,7 @@ public class BridgeOptionsBinderTests
         Assert.Equal(1000, Bind(("QueueCapacity", "1000")).QueueCapacity);
         Assert.Equal(1_000_000, Bind(("ContextWindowHint", "1000000")).ContextWindowHint);
         Assert.Equal(0, Bind(("ContextCacheSize", "0")).ContextCacheSize);
+        Assert.Equal(86_400, Bind(("DrainWarningSeconds", "86400")).DrainWarningSeconds);
     }
 
     [Fact]

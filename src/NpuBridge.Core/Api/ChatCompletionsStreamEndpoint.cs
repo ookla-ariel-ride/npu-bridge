@@ -288,7 +288,7 @@ internal sealed class ChatCompletionsStreamEndpoint
                 {
                     cancelledByCut = true;
                     await GenerationPipeline.DrainWithWarningsAsync(
-                        generation, options.DrainWarningSeconds, time, logger, requestId, "stream").ConfigureAwait(false);
+                        generation, options.DrainWarningSeconds, time, logger, requestId, "chat-stream").ConfigureAwait(false);
                 }
 
                 var schedulerOutcome = await StreamingPipeline.ReportSchedulerOutcomeAsync(
@@ -345,7 +345,7 @@ internal sealed class ChatCompletionsStreamEndpoint
                 if (cancelledByCut)
                 {
                     await GenerationPipeline.DrainWithWarningsAsync(
-                        generation, options.DrainWarningSeconds, time, logger, requestId, "stream").ConfigureAwait(false);
+                        generation, options.DrainWarningSeconds, time, logger, requestId, "chat-stream").ConfigureAwait(false);
                 }
 
                 var schedulerOutcome = await StreamingPipeline.ReportSchedulerOutcomeAsync(
@@ -612,7 +612,7 @@ internal sealed class ChatCompletionsStreamEndpoint
                     else
                     {
                         await GenerationPipeline.DrainWithWarningsAsync(
-                            generation, options.DrainWarningSeconds, time, logger, requestId, "stream").ConfigureAwait(false);
+                            generation, options.DrainWarningSeconds, time, logger, requestId, "chat-stream").ConfigureAwait(false);
                     }
                 }
                 catch (Exception ex)
