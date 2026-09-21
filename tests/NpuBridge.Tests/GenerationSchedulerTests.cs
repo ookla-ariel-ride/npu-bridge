@@ -51,7 +51,9 @@ public class GenerationSchedulerTests
             }, CancellationToken.None);
 
             // Structural, not timing-based: the worker is a single reader awaiting A's body to
-            // completion, and A's body is parked on gateA, so B cannot have been dequeued yet.
+            // completion, and A's body is parked on gateA, so B cannot have been dequeued yet. The
+            // order.Add(1) after gateA also strengthens the final order assertion: a concurrent B
+            // would produce [2, 1], not [1, 2].
             lock (order)
             {
                 Assert.DoesNotContain(2, order);
@@ -764,6 +766,8 @@ public class GenerationSchedulerTests
 
             job.MarkEnteredQueue();
             Assert.Equal(1, leftQueue);
+            cancellation.Cancel();
+            Assert.Equal(1, leftQueue);
         }
         finally
         {
@@ -784,6 +788,8 @@ public class GenerationSchedulerTests
             Assert.Equal(0, leftQueue); // Cancellation cannot remove a job not yet counted.
 
             job.MarkEnteredQueue();
+            Assert.Equal(1, leftQueue);
+            job.MarkDequeued();
             Assert.Equal(1, leftQueue);
         }
         finally
@@ -861,8 +867,9 @@ public class GenerationSchedulerTests
     }
 
     /// <summary>
-    /// Integration-level companion to the deterministic <c>Queue_depth_gate_*</c> tests above. Those
-    /// tests pin every publish-before-arm ordering directly; this one retains the real worker/channel
+    /// Integration-level companion to the deterministic
+    /// <see cref="Queue_depth_gate_cancelled_before_entered_leaves_exactly_once"/> tests above. Those
+    /// tests pin both publish-before-arm orderings directly; this one retains the real worker/channel
     /// path as a guard that completed jobs leave <c>QueueDepth</c> at zero.
     /// </summary>
     [Fact]
