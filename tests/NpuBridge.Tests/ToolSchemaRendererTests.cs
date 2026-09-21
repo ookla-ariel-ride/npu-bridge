@@ -46,7 +46,7 @@ public class ToolSchemaRendererTests
         Assert.Contains("Get current weather", rendered, StringComparison.Ordinal);
         Assert.Contains("reply with ONLY this JSON in a ```json fence and nothing else:", rendered, StringComparison.Ordinal);
         Assert.Contains(Envelope, rendered, StringComparison.Ordinal);
-        Assert.Contains("If no tool is needed, answer normally in plain text.", rendered, StringComparison.Ordinal);
+        Assert.Contains("If no tool is needed, answer normally in plain text. Never reply with an empty tool_calls list.", rendered, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -313,6 +313,6 @@ public class ToolSchemaRendererTests
     {
         var rendered = Compact(OneTool("ping", "Ping", null));
 
-        Assert.EndsWith("plain text.", rendered, StringComparison.Ordinal);
+        Assert.EndsWith("If no tool is needed, answer normally in plain text. Never reply with an empty tool_calls list.", rendered, StringComparison.Ordinal);
     }
 }
