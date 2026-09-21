@@ -796,7 +796,7 @@ function Get-CompactBlockFromFlatWireTools($wireTools) {
     }
     [void] $sb.Append("`n").Append('To call one or more tools, reply with ONLY this JSON in a ```json fence and nothing else:')
     [void] $sb.Append("`n").Append('{"tool_calls":[{"name":"<tool>","arguments":{...}}]}')
-    [void] $sb.Append("`n").Append('If no tool is needed, answer normally in plain text.')
+    [void] $sb.Append("`n").Append('If no tool is needed, answer normally in plain text. Never reply with an empty tool_calls list.')
     $sb.ToString()
 }
 
@@ -1341,7 +1341,7 @@ function Get-CompactBlock($tools) {
     }
     [void] $sb.Append("`n").Append('To call one or more tools, reply with ONLY this JSON in a ```json fence and nothing else:')
     [void] $sb.Append("`n").Append('{"tool_calls":[{"name":"<tool>","arguments":{...}}]}')
-    [void] $sb.Append("`n").Append('If no tool is needed, answer normally in plain text.')
+    [void] $sb.Append("`n").Append('If no tool is needed, answer normally in plain text. Never reply with an empty tool_calls list.')
     $sb.ToString()
 }
 
