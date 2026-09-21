@@ -740,9 +740,12 @@ public class ChatCompletionsStreamingTests
 
         await TestWait.UntilAsync(() => fake.CancellationsObserved == 1);
 
-        clock.Advance(TimeSpan.FromSeconds(60));
-        await TestWait.UntilAsync(() => capture.Records.Count(r => r.Level == LogLevel.Warning
-            && r.Message.Contains("generation drain is still waiting", StringComparison.Ordinal)) == 1);
+        await TestWait.UntilAsync(() =>
+        {
+            clock.Advance(TimeSpan.FromSeconds(60));
+            return capture.Records.Count(r => r.Level == LogLevel.Warning
+                && r.Message.Contains("generation drain is still waiting", StringComparison.Ordinal)) == 1;
+        });
         var firstWarning = Assert.Single(capture.Records, r => r.Level == LogLevel.Warning
             && r.Message.Contains("generation drain is still waiting", StringComparison.Ordinal));
         Assert.StartsWith("req=chatcmpl-", firstWarning.Message, StringComparison.Ordinal);
@@ -767,6 +770,72 @@ public class ChatCompletionsStreamingTests
         clock.Advance(TimeSpan.FromSeconds(60));
         Assert.Equal(2, capture.Records.Count(r => r.Level == LogLevel.Warning
             && r.Message.Contains("generation drain is still waiting", StringComparison.Ordinal)));
+        host.AssertNoLeak();
+    }
+
+    /// <summary>
+    /// A client abort can arrive after the first frame while the backend has emitted no further delta.
+    /// The cancellation and delta gates keep the context live while the stream's cut path drains it,
+    /// and the periodic warning remains observable until the fake's gate is released.
+    /// </summary>
+    [Fact]
+    public async Task A_streamed_abort_with_no_further_delta_drain_warns_periodically_until_it_completes()
+    {
+        var cancellationGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var deltaGate = cancellationGate;
+        var clock = new FakeTimeProvider(new DateTimeOffset(2026, 9, 21, 12, 0, 0, TimeSpan.Zero));
+        var capture = new CapturingLoggerProvider();
+        var fake = new FakeBackend(new FakeBackendOptions
+        {
+            Responder = _ => ["Hello", " world"],
+            CancellationGate = cancellationGate,
+            DeltaGate = deltaGate,
+            DeltaGateAfterTokens = 1,
+        });
+        await using var host = await BridgeTestHost.StartAsync(fake,
+            new BridgeOptions { Backend = BackendKind.Fake, DrainWarningSeconds = 60 },
+            time: clock,
+            loggerProvider: capture);
+
+        using var cts = new CancellationTokenSource();
+        using var request = new HttpRequestMessage(HttpMethod.Post, Path)
+        {
+            Content = JsonContent.Create(new
+            {
+                model = "fake",
+                stream = true,
+                max_tokens = 1,
+                messages = new[] { new { role = "user", content = "say hi" } },
+            }),
+        };
+
+        using var response = await host.Client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cts.Token);
+        await using var stream = await response.Content.ReadAsStreamAsync(cts.Token);
+        var buffer = new byte[128];
+        Assert.True(await stream.ReadAsync(buffer, cts.Token) > 0);
+
+        await cts.CancelAsync();
+        try
+        {
+            await TestWait.UntilAsync(() =>
+            {
+                clock.Advance(TimeSpan.FromSeconds(60));
+                return capture.Records.Any(r => r.Level == LogLevel.Warning
+                    && r.Message.Contains("generation drain is still waiting", StringComparison.Ordinal)
+                    && r.Message.Contains("shape=chat-stream", StringComparison.Ordinal));
+            });
+
+            var warning = Assert.Single(capture.Records, r => r.Level == LogLevel.Warning
+                && r.Message.Contains("generation drain is still waiting", StringComparison.Ordinal));
+            Assert.StartsWith("req=chatcmpl-", warning.Message, StringComparison.Ordinal);
+            Assert.Contains("shape=chat-stream", warning.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            cancellationGate.SetResult();
+        }
+
+        await TestWait.UntilAsync(() => fake.ActiveContexts == 0);
         host.AssertNoLeak();
     }
 

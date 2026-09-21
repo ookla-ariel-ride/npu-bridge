@@ -87,7 +87,7 @@ public static class CommandLine
           --tool-emulation on|off           Emulated function calling          [on]
           --tool-schema compact|full        How tool schemas reach the prompt  [compact]
           --context-window-hint <tokens>    Window the pressure warning is against  [4096]
-          --drain-warning-seconds <n>       Seconds between warnings while a cancelled generation is still draining; default 10
+          --drain-warning-seconds <n>       Warn every n seconds while a cancelled generation drains  [10]
           --laf-token <token>               Phi Silica LAF token (prefer env NPU_BRIDGE_LAF_TOKEN)
           --laf-attestation <text>          Phi Silica LAF attestation (prefer env NPU_BRIDGE_LAF_ATTESTATION)
           --self-relaunch on|off            Relaunch via package activation when phi-silica lacks identity [on]

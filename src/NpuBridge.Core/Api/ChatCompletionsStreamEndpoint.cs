@@ -262,7 +262,8 @@ internal sealed class ChatCompletionsStreamEndpoint
             if (generation.IsCompleted)
             {
                 var immediateResult = await StreamingPipeline.ReportSchedulerOutcomeAsync(
-                    generation, sse, http, logger, requestId, backendName, prepared, session, generationHealth, backendCalls, () => attemptDurationMs, aborted)
+                    generation, sse, http, logger, requestId, backendName, prepared, session, generationHealth, backendCalls,
+                    () => attemptDurationMs, options.DrainWarningSeconds, time, "chat-stream", aborted)
                     .ConfigureAwait(false);
                 if (immediateResult.Handled)
                 {
@@ -292,7 +293,8 @@ internal sealed class ChatCompletionsStreamEndpoint
                 }
 
                 var schedulerOutcome = await StreamingPipeline.ReportSchedulerOutcomeAsync(
-                    generation, sse, http, logger, requestId, backendName, prepared, session, generationHealth, backendCalls, () => attemptDurationMs, aborted)
+                    generation, sse, http, logger, requestId, backendName, prepared, session, generationHealth, backendCalls,
+                    () => attemptDurationMs, options.DrainWarningSeconds, time, "chat-stream", aborted)
                     .ConfigureAwait(false);
                 if (schedulerOutcome.Handled)
                 {
@@ -349,7 +351,8 @@ internal sealed class ChatCompletionsStreamEndpoint
                 }
 
                 var schedulerOutcome = await StreamingPipeline.ReportSchedulerOutcomeAsync(
-                    generation, sse, http, logger, requestId, backendName, prepared, session, generationHealth, backendCalls, () => attemptDurationMs, aborted)
+                    generation, sse, http, logger, requestId, backendName, prepared, session, generationHealth, backendCalls,
+                    () => attemptDurationMs, options.DrainWarningSeconds, time, "chat-stream", aborted)
                     .ConfigureAwait(false);
                 if (schedulerOutcome.Handled)
                 {
@@ -362,7 +365,8 @@ internal sealed class ChatCompletionsStreamEndpoint
             else
             {
                 var schedulerOutcome = await StreamingPipeline.ReportSchedulerOutcomeAsync(
-                    generation, sse, http, logger, requestId, backendName, prepared, session, generationHealth, backendCalls, () => attemptDurationMs, aborted)
+                    generation, sse, http, logger, requestId, backendName, prepared, session, generationHealth, backendCalls,
+                    () => attemptDurationMs, options.DrainWarningSeconds, time, "chat-stream", aborted)
                     .ConfigureAwait(false);
                 if (schedulerOutcome.Handled)
                 {
