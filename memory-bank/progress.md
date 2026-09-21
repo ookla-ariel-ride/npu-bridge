@@ -28,7 +28,7 @@
 | Fake backend with faults/threads/init rules | ✅ | tests |
 | Sparse package identity (`identity.ps1`) | ✅ | registered; PFN `NpuBridge_jtas4mnxdyzpe`. Since D82 `-Install` adds before it removes, so the successful path never leaves the machine unregistered. Re-registered 2026-09-12 after the folder rename, and that run proved the qualifier: `Add-AppxPackage` updates a same-identity registration in place only while the **external location** is unchanged, and refuses with `0x80073D0B` when it is not, at which point D82's remove-then-add fallback carries it. Smoke then reported `identity=True` |
 | Self-relaunch via package activation + supervision | ✅ | child had identity, saw shell env, died with the parent |
-| Phi Silica adapter (experimental SDK) | ✅ | smoke passed 2026-09-11 on build 29648 (generate, preflight, system prompt, disconnect drain, text contract: `text_mismatches=0 late_deltas=0`, D65). Insider flight 29661 broke it on 2026-09-10 (workload packages fail to register, model `NotReady`); rolled back |
+| Phi Silica adapter (experimental SDK) | ✅ | smoke passed 2026-09-15 on Dev build 29667, twice (`edaf254` and `3c429ab`: 41 steps, 0 skipped, text contract `text_mismatches=0 late_deltas=0`, D65). Insider flight 29661 broke it on 2026-09-10 (workload packages fail to register, model `NotReady`) and was rolled back to 29648; 29667 arrived later and works |
 | `/v1/chat/completions` non-streaming | ✅ | `ChatCompletionsTests`; smoke on the real NPU: 415 ms to 453 ms for a one-word reply on 2026-09-11 (677 ms to 899 ms in earlier runs), correct shape and usage |
 | `/v1/chat/completions` streaming (SSE) | ✅ | `ChatCompletionsStreamingTests` (framing, error event, keep-alive, disconnect drain); smoke streaming step on the NPU |
 | Client-side cut: `max_tokens`, `max_completion_tokens`, `stop` | ✅ | `OutputCutTests` on both shapes (chars/4) and `TokenBudgetCutTests` (token budgets, stand-in counters and the real Phi-3 one); smoke shows the cut cancels the NPU (D53) and that the streamed text counts exactly what `usage` reports (D80) |
@@ -44,10 +44,11 @@
 | Aion Instruct adapter (`--backend aion`) | ⚠️ | code-verified: `AionCapabilityProfileTests` and `DeltaAccumulatorTests`, two adversarial reviews applied (D69); `/healthz` reports the SDK's `InvalidCache` failure on this machine because the QNN provider cannot be loaded (D70) |
 
 ## Not built yet
-- **No chunk is outstanding.** `docs/PLAN.md`'s eight chunks are all merged as of 2026-09-12. The smoke wave (D103) is complete on `wave/smoke` and awaits its PR. Remaining
-  work is GitHub issues: #24, #27 and #28 from chunk 8, #33 left by the #29 to #31 wave, #14/#15/#16
-  from the coverage audit, #17, plus #2 and #11 for Aion. (#19, #22, #25, #26, #34 and #35 closed with
-  PR #37.)
+- **No chunk is outstanding.** `docs/PLAN.md`'s eight chunks are all merged as of 2026-09-12; the
+  `leftovers` wave merged as PR #37 (2026-09-15) and the `smoke` wave (D103) as PR #38 (2026-09-16).
+  Remaining work is GitHub issues: #24, #27 and #28 from chunk 8, #33 left by the #29 to #31 wave,
+  #14/#15/#16 from the coverage audit (#15 now down to its item 7 and the manual checklist), #17, plus
+  #2 and #11 for Aion. (#19, #22, #25, #26, #34 and #35 closed with PR #37.)
 - Aion Instruct adapter hardware verification: the adapter merged 2026-09-11 (chunk 6, D66 to D70) but
   build 29648 never grants a main-package dynamic dependency execute access, so no Aion generation has
   run; issue #2 stays open. Aion Instruct itself ships in October/November 2026 as a model swap behind

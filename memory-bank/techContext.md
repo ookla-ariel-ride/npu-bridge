@@ -1,7 +1,8 @@
 # Tech Context: npu-bridge
 
 ## Machine
-Samsung Galaxy Book4 Edge, Snapdragon X Elite (X1E80100), Windows 11 ARM64 Insider build 29648. The
+Samsung Galaxy Book4 Edge, Snapdragon X Elite (X1E80100), Windows 11 ARM64 Dev build 29667 (since
+some time before 2026-09-16; the earlier notes say 29648, where D70 was measured). The
 Git Bash tool runs under x64 emulation and misreports `AMD64`; trust PowerShell. This is the only
 machine; the NPU is here.
 
@@ -242,7 +243,7 @@ two come back `rate_limit_error`/`queue_full` with `Retry-After`.
   present, the active model is chosen by a Controlled Feature Rollout, and a registry key lets
   developers test side by side. November 2026: retail rollout, Phi Silica removed. "Unlike Phi Silica,
   LAF tokens are no longer needed with Aion Instruct." Windows App SDK 2.4.4 / 2.4.8-experimental
-  metadata carries no `Aion` identifier and this Insider build (29648) has no Aion registry keys or
+  metadata carries no `Aion` identifier and the Insider builds seen here (29648, then 29667) have no Aion registry keys or
   Aion-branded workload packages yet. Consequence: the preview SDK adapter (chunk 6) is a stopgap; the
   production Aion path is the Phi Silica adapter with a different model behind it, so the October
   work is a `--backend phi-silica` smoke run with the registry key flipped and a re-check of D31.

@@ -1,15 +1,25 @@
 # Active Context: npu-bridge
 
-_Last updated: 2026-09-15 (local afternoon), after the smoke wave reached `edaf254`. PR #37 merged as `8e9444e`; **all eight chunks of `docs/PLAN.md` are built and merged; the plan is complete.** Work is GitHub issues, run as board waves on `wave/<name>` branches that ship as pull requests; `docs/SESSION-HANDOFF.md` has the wave's state and what it taught._
+_Last updated: 2026-09-16, after PR #38 (the `smoke` wave, D103) merged. **All eight chunks of
+`docs/PLAN.md` are built and merged; the plan is complete.** Work is GitHub issues, run as board waves
+on `wave/<name>` branches that ship as pull requests; `docs/SESSION-HANDOFF.md` has the current state
+and what the last session taught._
 
 ## Where we are
-`main` and `origin/main` are `8e9444e` after PR #37 merged. `wave/smoke` is `edaf254`, 19 commits over `main`, unpushed and unmerged; the board's `integrationBranch` is still `wave/smoke`. 980 tests remain the last recorded full-suite result from `f1d3b8b`; the smoke branch's last clean hardware run had 41 steps, 34 pass, 0 fail, 0 skip and 7 informational, with the JSON verdict `pass` and the full commit hash.
+`main` and `origin/main` are `9ebca06`, the merge of PR #38 on 2026-09-16, on top of PR #37
+(`8e9444e`, 2026-09-15). No wave is open; the board's `integrationBranch` is `main` and every ticket is
+done. 980 tests, run by CI on PR #38 (`Passed: 980, Failed: 0, Skipped: 0`).
 
-**The last clean hardware smoke was on `edaf254`** (2026-09-15): 41 steps, 34 pass, 0 fail, 0 skip and 7 informational, final health `ok`, with the identical 26-pin baseline recorded in the handoff. The D80 cross-check reported 3,581 tokens and the first-generation retry count was 0. The earlier clean run on `3c429ab` had the same counts and pins line.
+**The last clean hardware smoke was on `edaf254`** (2026-09-15), the wave's last code commit: 41
+steps, 34 pass, 0 fail, 0 skip, 7 informational, final health `ok`, `first-generation RPC retry: 0`,
+the 26-pin baseline recorded in the handoff, and the D80 cross-check at 3,581 tokens. The run on
+`3c429ab` earlier that day had the same counts and pins line.
 
-Chunk 6, the Aion Instruct Preview adapter, is merged but code-verified only: build 29648 never appends
-`WIN://SYSAPPID` for a main-package dynamic dependency, so the Qualcomm QNN provider cannot be
-image-mapped and no Aion generation has ever run here (D70; issue #2 open). Do not re-investigate.
+The machine is on Dev build 29667 (noticed 2026-09-16); both smoke runs passed on it. Chunk 6, the Aion
+Instruct Preview adapter, is merged but code-verified only: on build 29648 Windows never appended
+`WIN://SYSAPPID` for a main-package dynamic dependency, so the Qualcomm QNN provider could not be
+image-mapped and no Aion generation has ever run here (D70; issue #2 open). That was not re-checked
+on 29667; the check is one `--backend aion` start and a `/healthz` read, and nothing beyond it.
 
 Aion Instruct ships as a model swap behind the Phi Silica API (Microsoft's Phi Silica page,
 2026-07-24): standalone package early October 2026, Insider rollout in October under a Controlled
@@ -53,7 +63,9 @@ Every code candidate was reviewed by a different model family than wrote it.
   the tracked region; the smoke's final-health read tolerates 503 again.
 
 ## Open threads
-No chunk is outstanding. The smoke wave is complete on `wave/smoke`; its PR and post-merge cleanup remain.
+No chunk is outstanding and no wave is open. #15 stays open for item 7 (the LAN `--listen` step) and
+its manual checklist; PR #38 closed it by accident through the phrase "does not close #15" and it was
+reopened.
 - **Next wave candidates:** #24 and #17 (scheduler and `/healthz`, both reshaped by this wave), #27
   and #28 (the streaming drain), #33 (a ruling first: tell the model to answer in prose when no tool
   applies, measure with the probe, then decide whether to strip an empty fence).
@@ -72,8 +84,9 @@ No chunk is outstanding. The smoke wave is complete on `wave/smoke`; its PR and 
 
 ## How to resume
 1. Read `CLAUDE.md`, then `docs/SESSION-HANDOFF.md`, then `docs/DECISIONS.md` D100 to D103.
-2. Push `wave/smoke`, open and merge its PR, then run `git switch main && git pull` and repoint the board's `integrationBranch` to `main`.
-3. `dotnet build; dotnet test` (expect 980). Do not build while a smoke server is running.
+2. `git switch main && git pull`, then `dotnet build; dotnet test` (expect 980). Do not build while a
+   smoke server is running.
+3. Optional: `--backend aion` on build 29667 and one `/healthz` read, recorded on issue #2 either way.
 4. Resolve the still-undecided #33 ruling and report the serena concurrent-worktree defect to Eigenwise/eigenwise-toolshed.
 5. Cut the next wave from `main`: one ticket per logical change (not per issue when an issue mixes a
    refactor with a behaviour change), `worktreeBase: local-main`, verify fields as one command or an
