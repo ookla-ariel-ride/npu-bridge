@@ -211,6 +211,12 @@ internal sealed class CompletionsStreamEndpoint
                     }
                 }
 
+                if (cancelledByCut)
+                {
+                    await GenerationPipeline.DrainWithWarningsAsync(
+                        generation, options.DrainWarningSeconds, time, logger, requestId, "stream").ConfigureAwait(false);
+                }
+
                 var schedulerOutcome = await StreamingPipeline.ReportSchedulerOutcomeAsync(
                     generation, sse, http, logger, requestId, backendName, prepared, session, generationHealth, backendCalls, () => attemptDurationMs, aborted)
                     .ConfigureAwait(false);
@@ -350,7 +356,15 @@ internal sealed class CompletionsStreamEndpoint
             {
                 try
                 {
-                    await generation.ConfigureAwait(false);
+                    if (generationCts is null)
+                    {
+                        await generation.ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        await GenerationPipeline.DrainWithWarningsAsync(
+                            generation, options.DrainWarningSeconds, time, logger, requestId, "stream").ConfigureAwait(false);
+                    }
                 }
                 catch (Exception ex)
                 {

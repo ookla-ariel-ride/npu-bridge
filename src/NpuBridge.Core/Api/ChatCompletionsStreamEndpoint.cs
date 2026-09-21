@@ -287,6 +287,8 @@ internal sealed class ChatCompletionsStreamEndpoint
                         () => currentGenerationCts!, logger, requestId, aborted).ConfigureAwait(false))
                 {
                     cancelledByCut = true;
+                    await GenerationPipeline.DrainWithWarningsAsync(
+                        generation, options.DrainWarningSeconds, time, logger, requestId, "stream").ConfigureAwait(false);
                 }
 
                 var schedulerOutcome = await StreamingPipeline.ReportSchedulerOutcomeAsync(
@@ -338,6 +340,12 @@ internal sealed class ChatCompletionsStreamEndpoint
                         // exactly once and only after the generation task has ended.
                         break;
                     }
+                }
+
+                if (cancelledByCut)
+                {
+                    await GenerationPipeline.DrainWithWarningsAsync(
+                        generation, options.DrainWarningSeconds, time, logger, requestId, "stream").ConfigureAwait(false);
                 }
 
                 var schedulerOutcome = await StreamingPipeline.ReportSchedulerOutcomeAsync(
@@ -597,7 +605,15 @@ internal sealed class ChatCompletionsStreamEndpoint
             {
                 try
                 {
-                    await generation.ConfigureAwait(false);
+                    if (generationCts is null)
+                    {
+                        await generation.ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        await GenerationPipeline.DrainWithWarningsAsync(
+                            generation, options.DrainWarningSeconds, time, logger, requestId, "stream").ConfigureAwait(false);
+                    }
                 }
                 catch (Exception ex)
                 {

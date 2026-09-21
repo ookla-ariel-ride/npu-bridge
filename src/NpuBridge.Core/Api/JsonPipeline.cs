@@ -178,6 +178,7 @@ internal static class JsonPipeline
                         // Skipped when the request set no limits: there is no watcher, so nothing can
                         // ever complete the other half of the race, and awaiting the generation alone
                         // says the same.
+                        var drainAfterCancellation = false;
                         if (watcher is not null)
                         {
                             await Task.WhenAny(generation, watcher.Signal).ConfigureAwait(false);
@@ -190,10 +191,14 @@ internal static class JsonPipeline
                                     logger,
                                     requestId,
                                     watcherFaulted ? "after a cutter fault" : "at the cut").ConfigureAwait(false);
+                                drainAfterCancellation = true;
                             }
                         }
 
-                        var result = await backendCalls.AwaitAsync(generation).ConfigureAwait(false);
+                        var result = drainAfterCancellation
+                            ? await backendCalls.AwaitAsync(GenerationPipeline.DrainWithWarningsAsync(
+                                generation, options.DrainWarningSeconds, time, logger, requestId, "json")).ConfigureAwait(false)
+                            : await backendCalls.AwaitAsync(generation).ConfigureAwait(false);
                         if (sink.BridgeFault is { } bridgeFault)
                         {
                             throw bridgeFault;
