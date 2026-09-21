@@ -210,7 +210,8 @@ pipeline → `text_completion` object; streaming emits `text` deltas.
 { "status":"ready|loading|failed", "backend":"phi-silica", "model":"phi-silica",
   "loading_seconds": 187, "first_run_compile_likely": true,
   "laf_status":"Available|AvailableWithoutToken|Unavailable|n/a",
-  "package_identity": true, "queue_depth": 0, "queue_capacity": 4, "contexts_cached": 2, "error": null }
+  "package_identity": true, "queue_depth": 0, "queue_capacity": 4, "contexts_cached": 2,
+  "capabilities":["sampling_options","system_prompt_context","prompt_length_preflight","cancellation"], "error": null }
 ```
 `first_run_compile_likely` is a heuristic (loading > 60 s) because neither API distinguishes
 "compiling" from "loading".

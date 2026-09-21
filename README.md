@@ -178,7 +178,7 @@ Keep-alive comments hold the connection open while that happens.
 |---|---|
 | `POST /v1/chat/completions` | chat completions, streaming and non-streaming |
 | `POST /v1/completions` | the legacy text-completion shape, streaming and non-streaming |
-| `GET /healthz` | backend state, load time, package identity, context-cache and queue counters, streaming keep-alive timings, diagnostics, the backend's known context window in tokens (`context_window_tokens`, null when unknown), `last_generation`, and `consecutive_backend_faults`. Returns 200 while ready with fewer than two consecutive backend faults; returns 503 when loading, unavailable, or degraded |
+| `GET /healthz` | backend state, load time, package identity, context-cache and queue counters, streaming keep-alive timings, diagnostics, the backend's known context window in tokens (`context_window_tokens`, null when unknown), supported backend capabilities (`capabilities`, snake_case names in enum order), `last_generation`, and `consecutive_backend_faults`. Returns 200 while ready with fewer than two consecutive backend faults; returns 503 when loading, unavailable, or degraded |
 | `GET /v1/models`, `GET /v1/models/{id}` | the active model id |
 | `POST /debug/generate` | one literal prompt into the backend with timing. Diagnostic, loopback only |
 | `POST /debug/tokenize` | the backend's token count of a literal text, and which counter answered. Diagnostic, loopback only, works while the model loads |
