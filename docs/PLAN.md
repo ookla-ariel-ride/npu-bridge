@@ -297,7 +297,7 @@ When `tools` is present and `--tool-emulation on`:
    ...
    To call one or more tools, reply with ONLY this JSON in a ```json fence and nothing else:
    {"tool_calls":[{"name":"<tool>","arguments":{...}}]}
-   If no tool is needed, answer normally in plain text.
+   If no tool is needed, answer normally in plain text. Never reply with an empty tool_calls list.
    ```
    Schemas are rendered in a **compact signature form** by default (`--tool-schema compact|full`)
    because full JSON Schema for OpenCode's ~15 tools alone is 2–3K tokens, i.e. most of Phi Silica's
