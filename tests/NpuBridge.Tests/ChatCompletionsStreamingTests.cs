@@ -774,9 +774,15 @@ public class ChatCompletionsStreamingTests
     }
 
     /// <summary>
-    /// A client abort can arrive after the first frame while the backend has emitted no further delta.
-    /// The cancellation and delta gates keep the context live while the stream's cut path drains it,
-    /// and the periodic warning remains observable until the fake's gate is released.
+    /// Issue #28's own scenario, and the one interleaving three rounds of fixes kept missing: the
+    /// client aborts after the first frame, the backend then emits no further delta, and it ignores the
+    /// cancel. There is no write left to fail and no cut to break the loop, so the only thing that can
+    /// get the request to its cancel-drain-dispose <c>finally</c> is the reader loop's own token. With
+    /// the read on <c>CancellationToken.None</c> this parks forever on a channel the generation will
+    /// never complete: the context stays held and nothing is ever logged about it.
+    ///
+    /// No <c>max_tokens</c>, deliberately — a budget makes the cutter fire and the cut path drains
+    /// through a different call, which is how this test passed while the defect it names was live.
     /// </summary>
     [Fact]
     public async Task A_streamed_abort_with_no_further_delta_drain_warns_periodically_until_it_completes()
@@ -804,16 +810,20 @@ public class ChatCompletionsStreamingTests
             {
                 model = "fake",
                 stream = true,
-                max_tokens = 1,
                 messages = new[] { new { role = "user", content = "say hi" } },
             }),
         };
 
         using var response = await host.Client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cts.Token);
-        await using var stream = await response.Content.ReadAsStreamAsync(cts.Token);
-        var buffer = new byte[128];
-        Assert.True(await stream.ReadAsync(buffer, cts.Token) > 0);
+        await using (var stream = await response.Content.ReadAsStreamAsync(cts.Token))
+        {
+            var buffer = new byte[128];
+            Assert.True(await stream.ReadAsync(buffer, cts.Token) > 0);
+        }
 
+        // The client goes away. Releasing the response stream is what the server sees as the abort —
+        // cancelling the send token alone only ends the client's own read — so the two known-good
+        // disconnect tests in this file do both, in this order, and so does this one.
         await cts.CancelAsync();
         try
         {
