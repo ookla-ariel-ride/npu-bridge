@@ -46,6 +46,9 @@ public sealed class BridgeOptions
     /// <summary>Requests waiting for the single generation worker before new ones get 429.</summary>
     public int QueueCapacity { get; set; } = 4;
 
+    /// <summary>Seconds between warnings while a cancelled generation drains before its context can be settled.</summary>
+    public int DrainWarningSeconds { get; set; } = 10;
+
     /// <summary>Conversation contexts kept alive (LRU). 0 disables the cache.</summary>
     public int ContextCacheSize { get; set; } = 4;
 

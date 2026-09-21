@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Time.Testing;
 using NpuBridge.Backends;
 using NpuBridge.Backends.Fake;
 using NpuBridge.Configuration;
@@ -786,6 +787,67 @@ public class ChatCompletionsTests
         Assert.Equal(0, fake.ActiveContexts);
         Assert.Single(fake.Calls);
         Assert.DoesNotContain(capture.Records, r => r.Level >= LogLevel.Error);
+        host.AssertNoLeak();
+    }
+
+    /// <summary>
+    /// The JSON twin of the stream drain warning test: the shared helper must keep observing a
+    /// cancelled generation until the fake's gate releases it, without settling its context early.
+    /// </summary>
+    [Fact]
+    public async Task A_cancelled_json_drain_warns_periodically_until_it_completes()
+    {
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var clock = new FakeTimeProvider(new DateTimeOffset(2026, 9, 21, 12, 0, 0, TimeSpan.Zero));
+        var capture = new CapturingLoggerProvider();
+        var fake = new FakeBackend(new FakeBackendOptions
+        {
+            Responder = _ => ["Hello", " world"],
+            CancellationGate = gate,
+            DeltaGate = gate,
+            DeltaGateAfterTokens = 1,
+        });
+        await using var host = await BridgeTestHost.StartAsync(fake,
+            new BridgeOptions { Backend = BackendKind.Fake, DrainWarningSeconds = 10 },
+            time: clock,
+            loggerProvider: capture);
+
+        var responseTask = host.Client.PostAsJsonAsync(Path, new
+        {
+            model = "fake",
+            max_tokens = 1,
+            messages = new[] { new { role = "user", content = "say hi" } },
+        });
+
+        await TestWait.UntilAsync(() => fake.CancellationsObserved == 1);
+
+        clock.Advance(TimeSpan.FromSeconds(10));
+        await TestWait.UntilAsync(() => capture.Records.Count(r => r.Level == LogLevel.Warning
+            && r.Message.Contains("generation drain is still waiting", StringComparison.Ordinal)) == 1);
+        var warning = Assert.Single(capture.Records, r => r.Level == LogLevel.Warning
+            && r.Message.Contains("generation drain is still waiting", StringComparison.Ordinal));
+        Assert.StartsWith("req=chatcmpl-", warning.Message, StringComparison.Ordinal);
+        Assert.Contains("shape=json", warning.Message, StringComparison.Ordinal);
+        Assert.Contains("after 10s", warning.Message, StringComparison.Ordinal);
+
+        clock.Advance(TimeSpan.FromSeconds(10));
+        await TestWait.UntilAsync(() => capture.Records.Count(r => r.Level == LogLevel.Warning
+            && r.Message.Contains("generation drain is still waiting", StringComparison.Ordinal)) == 2);
+
+        gate.SetResult();
+        using var response = await responseTask;
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        await TestWait.UntilAsync(() => capture.Records.Any(r => r.Level == LogLevel.Information
+            && r.Message.Contains("generation drain completed", StringComparison.Ordinal)));
+        var completed = Assert.Single(capture.Records, r => r.Level == LogLevel.Information
+            && r.Message.Contains("generation drain completed", StringComparison.Ordinal));
+        Assert.Contains("req=chatcmpl-", completed.Message, StringComparison.Ordinal);
+        Assert.Contains("shape=json", completed.Message, StringComparison.Ordinal);
+        Assert.Contains("after 20s", completed.Message, StringComparison.Ordinal);
+
+        clock.Advance(TimeSpan.FromSeconds(10));
+        Assert.Equal(2, capture.Records.Count(r => r.Level == LogLevel.Warning
+            && r.Message.Contains("generation drain is still waiting", StringComparison.Ordinal)));
         host.AssertNoLeak();
     }
 

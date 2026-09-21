@@ -116,6 +116,54 @@ internal static class GenerationPipeline
     }
 
     /// <summary>
+    /// Awaits a cancelled generation without ever bounding that wait. The context cannot be settled while
+    /// its backend operation may still be using it (D51), so this only observes a slow drain; it never
+    /// turns one into a timeout. Both response shapes use this at their cancel-drain-settle boundary.
+    /// </summary>
+    public static async Task<T> DrainWithWarningsAsync<T>(
+        Task<T> generation,
+        int warningSeconds,
+        TimeProvider time,
+        ILogger logger,
+        string requestId,
+        string shape)
+    {
+        var interval = TimeSpan.FromSeconds(warningSeconds);
+        var started = time.GetTimestamp();
+        var warned = false;
+
+        using var stopWarningDelay = new CancellationTokenSource();
+        try
+        {
+            while (!generation.IsCompleted)
+            {
+                var nextWarning = Task.Delay(interval, time, stopWarningDelay.Token);
+                if (await Task.WhenAny(generation, nextWarning).ConfigureAwait(false) == generation || generation.IsCompleted)
+                {
+                    break;
+                }
+
+                warned = true;
+                var waitedSeconds = (long)Math.Floor(time.GetElapsedTime(started).TotalSeconds);
+                logger.LogWarning("req={RequestId} shape={Shape} generation drain is still waiting after {SecondsWaited}s.",
+                    requestId, shape, waitedSeconds);
+            }
+
+            return await generation.ConfigureAwait(false);
+        }
+        finally
+        {
+            stopWarningDelay.Cancel();
+            if (warned)
+            {
+                var waitedSeconds = (long)Math.Floor(time.GetElapsedTime(started).TotalSeconds);
+                logger.LogInformation("req={RequestId} shape={Shape} generation drain completed after {SecondsWaited}s.",
+                    requestId, shape, waitedSeconds);
+            }
+        }
+    }
+
+    /// <summary>
     /// The log line's <c>cache=</c> field: <c>hit</c>, <c>miss</c>, or <c>-</c> for a request that never
     /// got as far as a context. Four copies of this one expression existed — one per endpoint — until
     /// <see cref="StreamingPipeline"/> took two of them and <see cref="JsonPipeline"/> the other two;
