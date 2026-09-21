@@ -210,9 +210,15 @@ internal static class StreamingPipeline
         GenerationHealth generationHealth,
         BackendCallTracker backendCalls,
         Func<double> attemptDuration,
+        int warningSeconds,
+        TimeProvider time,
+        string shape,
         CancellationToken aborted)
     {
-        var scheduled = await generation.ConfigureAwait(false);
+        var scheduled = aborted.IsCancellationRequested
+            ? await GenerationPipeline.DrainWithWarningsAsync(
+                generation, warningSeconds, time, logger, requestId, shape).ConfigureAwait(false)
+            : await generation.ConfigureAwait(false);
         var queueWaitMs = scheduled.QueueWait.TotalMilliseconds;
         var admission = SchedulerAdmission.Classify(scheduled, aborted.IsCancellationRequested);
 

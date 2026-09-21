@@ -256,9 +256,12 @@ public class CompletionsStreamingTests
 
         await TestWait.UntilAsync(() => fake.CancellationsObserved == 1);
 
-        clock.Advance(TimeSpan.FromSeconds(60));
-        await TestWait.UntilAsync(() => capture.Records.Count(r => r.Level == LogLevel.Warning
-            && r.Message.Contains("generation drain is still waiting", StringComparison.Ordinal)) == 1);
+        await TestWait.UntilAsync(() =>
+        {
+            clock.Advance(TimeSpan.FromSeconds(60));
+            return capture.Records.Count(r => r.Level == LogLevel.Warning
+                && r.Message.Contains("generation drain is still waiting", StringComparison.Ordinal)) == 1;
+        });
         var warning = Assert.Single(capture.Records, r => r.Level == LogLevel.Warning
             && r.Message.Contains("generation drain is still waiting", StringComparison.Ordinal));
         Assert.StartsWith("req=chatcmpl-", warning.Message, StringComparison.Ordinal);
