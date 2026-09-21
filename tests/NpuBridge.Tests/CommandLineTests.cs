@@ -26,6 +26,14 @@ public class CommandLineTests
     }
 
     [Fact]
+    public void Drain_warning_seconds_option_maps_to_config_key()
+    {
+        var parsed = CommandLine.Parse(["--drain-warning-seconds", "60"]);
+        Assert.False(parsed.IsError, parsed.Error);
+        Assert.Equal(["DrainWarningSeconds=60"], parsed.ConfigArgs);
+    }
+
+    [Fact]
     public void Bare_boolean_switches_become_true()
     {
         var parsed = CommandLine.Parse(["--verbose", "--truncate-history", "--backend", "fake"]);

@@ -79,7 +79,7 @@ internal sealed class CompletionsEndpoint
         // The generation phase is JsonPipeline's, shared byte for byte with /v1/chat/completions --
         // which is the point: a second copy of it is what D56 and D57 record drifting. This endpoint
         // keeps only the legacy wire shape, built below from the pipeline's JsonReply.
-        return await JsonPipeline.RunAsync(http, prepared, options, cache, scheduler, generationHealth, time, logger,
+        return await JsonPipeline.RunAsync(http, prepared, options, cache, scheduler, generationHealth, time, logger, "completions-json",
             reply => new CompletionResponse(
                 Id: reply.Id,
                 Created: reply.Created,

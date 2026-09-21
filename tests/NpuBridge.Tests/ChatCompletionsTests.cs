@@ -808,7 +808,7 @@ public class ChatCompletionsTests
             DeltaGateAfterTokens = 1,
         });
         await using var host = await BridgeTestHost.StartAsync(fake,
-            new BridgeOptions { Backend = BackendKind.Fake, DrainWarningSeconds = 10 },
+            new BridgeOptions { Backend = BackendKind.Fake, DrainWarningSeconds = 60 },
             time: clock,
             loggerProvider: capture);
 
@@ -821,16 +821,16 @@ public class ChatCompletionsTests
 
         await TestWait.UntilAsync(() => fake.CancellationsObserved == 1);
 
-        clock.Advance(TimeSpan.FromSeconds(10));
+        clock.Advance(TimeSpan.FromSeconds(60));
         await TestWait.UntilAsync(() => capture.Records.Count(r => r.Level == LogLevel.Warning
             && r.Message.Contains("generation drain is still waiting", StringComparison.Ordinal)) == 1);
         var warning = Assert.Single(capture.Records, r => r.Level == LogLevel.Warning
             && r.Message.Contains("generation drain is still waiting", StringComparison.Ordinal));
         Assert.StartsWith("req=chatcmpl-", warning.Message, StringComparison.Ordinal);
-        Assert.Contains("shape=json", warning.Message, StringComparison.Ordinal);
-        Assert.Contains("after 10s", warning.Message, StringComparison.Ordinal);
+        Assert.Contains("shape=chat-json", warning.Message, StringComparison.Ordinal);
+        Assert.Contains("after 60s", warning.Message, StringComparison.Ordinal);
 
-        clock.Advance(TimeSpan.FromSeconds(10));
+        clock.Advance(TimeSpan.FromSeconds(60));
         await TestWait.UntilAsync(() => capture.Records.Count(r => r.Level == LogLevel.Warning
             && r.Message.Contains("generation drain is still waiting", StringComparison.Ordinal)) == 2);
 
@@ -842,12 +842,66 @@ public class ChatCompletionsTests
         var completed = Assert.Single(capture.Records, r => r.Level == LogLevel.Information
             && r.Message.Contains("generation drain completed", StringComparison.Ordinal));
         Assert.Contains("req=chatcmpl-", completed.Message, StringComparison.Ordinal);
-        Assert.Contains("shape=json", completed.Message, StringComparison.Ordinal);
-        Assert.Contains("after 20s", completed.Message, StringComparison.Ordinal);
+        Assert.Contains("shape=chat-json", completed.Message, StringComparison.Ordinal);
+        Assert.Contains("after 120s", completed.Message, StringComparison.Ordinal);
 
-        clock.Advance(TimeSpan.FromSeconds(10));
+        clock.Advance(TimeSpan.FromSeconds(60));
         Assert.Equal(2, capture.Records.Count(r => r.Level == LogLevel.Warning
             && r.Message.Contains("generation drain is still waiting", StringComparison.Ordinal)));
+        host.AssertNoLeak();
+    }
+
+    [Fact]
+    public async Task A_client_that_disconnects_mid_json_generation_drain_warns_periodically_until_it_completes()
+    {
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var clock = new FakeTimeProvider(new DateTimeOffset(2026, 9, 21, 12, 0, 0, TimeSpan.Zero));
+        var capture = new CapturingLoggerProvider();
+        var fake = new FakeBackend(new FakeBackendOptions
+        {
+            Responder = _ => ["Hello", " world"],
+            CancellationGate = gate,
+            DeltaGate = gate,
+            DeltaGateAfterTokens = 1,
+        });
+        await using var host = await BridgeTestHost.StartAsync(fake,
+            new BridgeOptions { Backend = BackendKind.Fake, DrainWarningSeconds = 60 },
+            time: clock,
+            loggerProvider: capture);
+
+        using var cts = new CancellationTokenSource();
+        var post = host.Client.PostAsJsonAsync(Path, ChatBody.User(), cts.Token);
+
+        await TestWait.UntilAsync(() => fake.DeltasEmitted == 1);
+        await cts.CancelAsync();
+
+        try
+        {
+            await TestWait.UntilAsync(() => fake.CancellationsObserved == 1);
+
+            // The client cancellation callback and the scheduler worker run independently. Each polling
+            // pass advances only the injected clock, so the worker's timer is armed before its next
+            // interval without making a wall-clock assertion.
+            await TestWait.UntilAsync(() =>
+            {
+                clock.Advance(TimeSpan.FromSeconds(60));
+                return capture.Records.Any(r => r.Level == LogLevel.Warning
+                    && r.Message.Contains("generation drain is still waiting", StringComparison.Ordinal));
+            });
+
+            var warning = capture.Records.First(r => r.Level == LogLevel.Warning
+                && r.Message.Contains("generation drain is still waiting", StringComparison.Ordinal));
+            Assert.StartsWith("req=chatcmpl-", warning.Message, StringComparison.Ordinal);
+            Assert.Contains("shape=chat-json", warning.Message, StringComparison.Ordinal);
+            Assert.Contains("after 60s", warning.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            gate.SetResult();
+        }
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => post);
+        await TestWait.UntilAsync(() => fake.ActiveContexts == 0);
         host.AssertNoLeak();
     }
 

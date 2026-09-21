@@ -726,7 +726,7 @@ public class ChatCompletionsStreamingTests
             DeltaGateAfterTokens = 1,
         });
         await using var host = await BridgeTestHost.StartAsync(fake,
-            new BridgeOptions { Backend = BackendKind.Fake, DrainWarningSeconds = 10 },
+            new BridgeOptions { Backend = BackendKind.Fake, DrainWarningSeconds = 60 },
             time: clock,
             loggerProvider: capture);
 
@@ -740,16 +740,16 @@ public class ChatCompletionsStreamingTests
 
         await TestWait.UntilAsync(() => fake.CancellationsObserved == 1);
 
-        clock.Advance(TimeSpan.FromSeconds(10));
+        clock.Advance(TimeSpan.FromSeconds(60));
         await TestWait.UntilAsync(() => capture.Records.Count(r => r.Level == LogLevel.Warning
             && r.Message.Contains("generation drain is still waiting", StringComparison.Ordinal)) == 1);
         var firstWarning = Assert.Single(capture.Records, r => r.Level == LogLevel.Warning
             && r.Message.Contains("generation drain is still waiting", StringComparison.Ordinal));
         Assert.StartsWith("req=chatcmpl-", firstWarning.Message, StringComparison.Ordinal);
-        Assert.Contains("shape=stream", firstWarning.Message, StringComparison.Ordinal);
-        Assert.Contains("after 10s", firstWarning.Message, StringComparison.Ordinal);
+        Assert.Contains("shape=chat-stream", firstWarning.Message, StringComparison.Ordinal);
+        Assert.Contains("after 60s", firstWarning.Message, StringComparison.Ordinal);
 
-        clock.Advance(TimeSpan.FromSeconds(10));
+        clock.Advance(TimeSpan.FromSeconds(60));
         await TestWait.UntilAsync(() => capture.Records.Count(r => r.Level == LogLevel.Warning
             && r.Message.Contains("generation drain is still waiting", StringComparison.Ordinal)) == 2);
 
@@ -761,10 +761,10 @@ public class ChatCompletionsStreamingTests
         var completed = Assert.Single(capture.Records, r => r.Level == LogLevel.Information
             && r.Message.Contains("generation drain completed", StringComparison.Ordinal));
         Assert.Contains("req=chatcmpl-", completed.Message, StringComparison.Ordinal);
-        Assert.Contains("shape=stream", completed.Message, StringComparison.Ordinal);
-        Assert.Contains("after 20s", completed.Message, StringComparison.Ordinal);
+        Assert.Contains("shape=chat-stream", completed.Message, StringComparison.Ordinal);
+        Assert.Contains("after 120s", completed.Message, StringComparison.Ordinal);
 
-        clock.Advance(TimeSpan.FromSeconds(10));
+        clock.Advance(TimeSpan.FromSeconds(60));
         Assert.Equal(2, capture.Records.Count(r => r.Level == LogLevel.Warning
             && r.Message.Contains("generation drain is still waiting", StringComparison.Ordinal)));
         host.AssertNoLeak();

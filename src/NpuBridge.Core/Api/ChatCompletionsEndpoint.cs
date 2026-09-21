@@ -101,7 +101,7 @@ internal sealed class ChatCompletionsEndpoint
         // the scheduler admission mapping, the cut, GenerationOutcome, the cache decision, the usage
         // estimate, the log line and both catch clauses. This endpoint's whole remaining job is the
         // wire shape it serves, which is the factory below.
-        return await JsonPipeline.RunAsync(http, prepared, options, cache, scheduler, generationHealth, time, logger,
+        return await JsonPipeline.RunAsync(http, prepared, options, cache, scheduler, generationHealth, time, logger, "chat-json",
             reply => new ChatCompletionResponse(
                 Id: reply.Id,
                 Created: reply.Created,
