@@ -174,7 +174,7 @@ internal sealed class CompletionsStreamEndpoint
             {
                 var immediateResult = await StreamingPipeline.ReportSchedulerOutcomeAsync(
                     generation, sse, http, logger, requestId, backendName, prepared, session, generationHealth, backendCalls,
-                    () => attemptDurationMs, options.DrainWarningSeconds, time, "completions-stream", aborted)
+                    () => attemptDurationMs, aborted)
                     .ConfigureAwait(false);
                 if (immediateResult.Handled)
                 {
@@ -190,9 +190,10 @@ internal sealed class CompletionsStreamEndpoint
             GenerationResult result;
             if (streamed)
             {
-                // Deliberately not cancelled by `aborted`: the loop must end when the channel completes,
-                // so that `generation` is always reached and always drained below.
-                await foreach (var delta in channel.Reader.ReadAllAsync(CancellationToken.None).ConfigureAwait(false))
+                // Cancelled by `aborted`, and the channel completing still ends it normally -- the same
+                // two exits, for the same two reasons, as the chat shape's loop; see
+                // ChatCompletionsStreamEndpoint for the full account of why both are needed.
+                await foreach (var delta in channel.Reader.ReadAllAsync(aborted).ConfigureAwait(false))
                 {
                     var release = cutter.Accept(delta);
                     if (release.Length > 0)
@@ -220,7 +221,7 @@ internal sealed class CompletionsStreamEndpoint
 
                 var schedulerOutcome = await StreamingPipeline.ReportSchedulerOutcomeAsync(
                     generation, sse, http, logger, requestId, backendName, prepared, session, generationHealth, backendCalls,
-                    () => attemptDurationMs, options.DrainWarningSeconds, time, "completions-stream", aborted)
+                    () => attemptDurationMs, aborted)
                     .ConfigureAwait(false);
                 if (schedulerOutcome.Handled)
                 {
@@ -234,7 +235,7 @@ internal sealed class CompletionsStreamEndpoint
             {
                 var schedulerOutcome = await StreamingPipeline.ReportSchedulerOutcomeAsync(
                     generation, sse, http, logger, requestId, backendName, prepared, session, generationHealth, backendCalls,
-                    () => attemptDurationMs, options.DrainWarningSeconds, time, "completions-stream", aborted)
+                    () => attemptDurationMs, aborted)
                     .ConfigureAwait(false);
                 if (schedulerOutcome.Handled)
                 {
@@ -359,15 +360,11 @@ internal sealed class CompletionsStreamEndpoint
             {
                 try
                 {
-                    if (generationCts is null)
-                    {
-                        await generation.ConfigureAwait(false);
-                    }
-                    else
-                    {
-                        await GenerationPipeline.DrainWithWarningsAsync(
-                            generation, options.DrainWarningSeconds, time, logger, requestId, "completions-stream").ConfigureAwait(false);
-                    }
+                    // Unconditionally through the warning drain, as on the chat shape: it costs nothing
+                    // once the task has ended, and a job still queued is the one case where the wait is
+                    // both unbounded and silent.
+                    await GenerationPipeline.DrainWithWarningsAsync(
+                        generation, options.DrainWarningSeconds, time, logger, requestId, "completions-stream").ConfigureAwait(false);
                 }
                 catch (Exception ex)
                 {

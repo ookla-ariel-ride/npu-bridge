@@ -290,6 +290,72 @@ public class CompletionsStreamingTests
     }
 
     /// <summary>
+    /// The legacy shape's copy of issue #28's own scenario: the client aborts after the first frame, the
+    /// backend emits no further delta and ignores the cancel, so there is no write left to fail and no
+    /// cut to break the reader loop. Only the loop's own token can get the request to the
+    /// cancel-drain-dispose <c>finally</c>; without it the read parks on a channel the generation will
+    /// never complete and the context is held silently. This endpoint's loop and <c>finally</c> are its
+    /// own copies, not the chat shape's, which is why this twin exists at all. No <c>max_tokens</c>,
+    /// deliberately: a budget would route the drain through the cut path instead.
+    /// </summary>
+    [Fact]
+    public async Task A_streamed_abort_with_no_further_delta_drain_warns_periodically_until_it_completes()
+    {
+        var cancellationGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var clock = new FakeTimeProvider(new DateTimeOffset(2026, 9, 21, 12, 0, 0, TimeSpan.Zero));
+        var capture = new CapturingLoggerProvider();
+        var fake = new FakeBackend(new FakeBackendOptions
+        {
+            Responder = _ => ["Hello", " world"],
+            CancellationGate = cancellationGate,
+            DeltaGate = cancellationGate,
+            DeltaGateAfterTokens = 1,
+        });
+        await using var host = await BridgeTestHost.StartAsync(fake,
+            new BridgeOptions { Backend = BackendKind.Fake, DrainWarningSeconds = 60 },
+            time: clock,
+            loggerProvider: capture);
+
+        using var cts = new CancellationTokenSource();
+        using var request = new HttpRequestMessage(HttpMethod.Post, Path)
+        {
+            Content = JsonContent.Create(Body(model: "fake", stream: true, includeUsage: null, maxTokens: null, stop: null)),
+        };
+
+        using var response = await host.Client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cts.Token);
+        await using (var stream = await response.Content.ReadAsStreamAsync(cts.Token))
+        {
+            var buffer = new byte[128];
+            Assert.True(await stream.ReadAsync(buffer, cts.Token) > 0);
+        }
+
+        // Releasing the response stream is what the server sees as the abort; see the chat twin.
+        await cts.CancelAsync();
+        try
+        {
+            await TestWait.UntilAsync(() =>
+            {
+                clock.Advance(TimeSpan.FromSeconds(60));
+                return capture.Records.Any(r => r.Level == LogLevel.Warning
+                    && r.Message.Contains("generation drain is still waiting", StringComparison.Ordinal)
+                    && r.Message.Contains("shape=completions-stream", StringComparison.Ordinal));
+            });
+
+            var warning = Assert.Single(capture.Records, r => r.Level == LogLevel.Warning
+                && r.Message.Contains("generation drain is still waiting", StringComparison.Ordinal));
+            Assert.StartsWith("req=chatcmpl-", warning.Message, StringComparison.Ordinal);
+            Assert.Contains("shape=completions-stream", warning.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            cancellationGate.SetResult();
+        }
+
+        await TestWait.UntilAsync(() => fake.ActiveContexts == 0);
+        host.AssertNoLeak();
+    }
+
+    /// <summary>
     /// Task 3b review fix round 1, Finding 2: this endpoint's own <c>catch (Exception ex) when
     /// (aborted.IsCancellationRequested)</c> clause and its cancel-drain-settle <c>finally</c>
     /// (<c>CompletionsStreamEndpoint.cs</c>) were not part of the extraction -- they are per-endpoint
