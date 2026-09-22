@@ -40,6 +40,20 @@ land here instead of widening the chunk. Each entry says where it came from and 
 - **F7: relative JSON output resolves against the process directory.** The review's F7 finding showed that -JsonOut uses Environment.CurrentDirectory, so a relative path can land elsewhere and a missing directory can terminate the script before its verdict line. It waits because documented examples use absolute paths and the current run wrote a valid summary. The reviewer's proposed fix is to resolve the provider path explicitly and catch write failures so the verdict still prints.
 - **F8: the help check can match prose.** The review's F8 finding showed that the --help assertion searches for bare verbs and can pass when only descriptive prose contains them. It waits because the current executable's help output passed and the issue is a narrow false-positive guard. The reviewer's proposed fix is to anchor the match to npu-bridge service or npu-bridge task usage lines.
 
+## 2026-09-21 chunk8-leftovers wave deferrals
+
+- **The `JsonPipeline` AwaitAsync wrapper can attribute a bridge-side drain throw as a backend fault** (SQ-54 F1). The binder's 1..86,400 range makes the throw unreachable through normal configuration, and the wrapper stays because it attributes the generation's own exception correctly.
+- **The closure's tail after `TryComplete()` can finish without a drain warning** (SQ-58 F1). The closure still runs `attemptLease.Dispose()` on the thrown path and the scheduler settles the task after `TryComplete()`; the plain await therefore sees the tail after the reader-loop drain. The relevant review locations were `ChatCompletionsStreamEndpoint.cs:226-233`, `CompletionsStreamEndpoint.cs:148-152` and the five post-loop call sites. The generation had ended, and no blocking dispose was observed.
+- **`DrainBufferedAsync` mixes a `Stopwatch` cadence with `TimeProvider` waits** (SQ-49 F3). This is harmless under `TimeProvider.System`; align the cadence if the buffered path is changed.
+- **The zero-interval `DrainBufferedAsync` branch reads with `CancellationToken.None`** (SQ-56). A non-default `KeepAliveInterval <= TimeSpan.Zero` can park on client abort like the original reader-loop path.
+- **No keep-alive is written during a drain** (SQ-52 F7). A proxy counting idle seconds can still drop the connection while a cancelled generation is draining.
+- **The streamed shapes' pre-Acquire wait is silent.** When `generationCts` is null, the wait before acquisition has no drain warning.
+- **The sibling truncation window remains untested** (#27 item 4). It would need a new fake gate rather than a timing assertion.
+- **The rapid drain test's `cref` names one of five sibling tests** (SQ-54 F5), so the documentation reference should be narrowed when the test file is next touched.
+- **The first-frame hook is written two ways** (SQ-54 F6): `CreateBeforeHeadersHook` is named on the completions stream and an inline lambda remains on the chat stream. A shared seam would be a separate change.
+- **There is no exhaustive-property assertion for `/healthz`** (SQ-54 F7). `Ready_backend_reports_200_with_expected_fields` checks fields one at a time; adding an exhaustive assertion would make additions fail loudly.
+- **A fourth scheduler flag could be replaced by arming and counting before `TryWrite`** (whole-branch /code-review, design note on #24). Arm the job and increment the live count before the write, then roll back the count if `TryWrite` fails; the cancellation callback can then always decrement the armed job, and the worker's dequeue remains the backstop. This is deferred because the current three-signal gate is reviewed and proven.
+
 ## Chunk 8 deferrals (concurrency scheduler and `/v1/completions`)
 
 - **`/v1/completions`'s request id uses the `chatcmpl-` prefix**, not OpenAI's `cmpl-`: it is allocated
@@ -58,14 +72,14 @@ land here instead of widening the chunk. Each entry says where it came from and 
   line explaining why rather than a silent difference. Implementing it for real is a small, self-
   contained change to `CompletionsEndpoint`/`CompletionsStreamEndpoint` (prepend `prompt` to the first
   chunk of text, or to the whole reply on the JSON shape) whenever it is worth a task of its own.
-- **`StreamingPipeline.WaitForDeltaAsync`'s stale-timeout guard (`if (wait.IsCompleted) return await
-  wait;`) has no dedicated test**, on either streaming shape (task 3b review, fix round 1, Finding 2).
-  It is not intrinsically untestable: `Task.WaitAsync(TimeSpan, TimeProvider, CancellationToken)` plus a
-  `FakeTimeProvider` would let a test complete the channel first and then advance the clock so the timer
-  fires with `wait` already complete -- the guard's exact case, deterministically, with no wall-clock
-  assertion (D54). That needs `_time` threaded into `WaitForDeltaAsync` in place of the real clock
-  `Task.WaitAsync` uses today, which is a production change and so out of scope for a coverage-only
-  task. A genuine client-disconnect mid-stream is covered on both endpoints as of task 3b (fix round 1).
+- **`StreamingPipeline.WaitForDeltaAsync`'s stale-timeout guard remains deliberately untested** (SQ-49, D104).
+  The attempted test was decided by the thread-pool scheduler: it failed 25/25 times at
+  `DOTNET_PROCESSOR_COUNT=1` and failed 0.5 to 10 percent under pool load on a 12-core host. No
+  `FakeTimeProvider` arrangement reached `if (wait.IsCompleted)` because completing the source task
+  resolves `Task.WaitAsync`'s cancellation promise before its timer fires. An injectable timeout factory
+  or a `Task.WhenAny` over `time.Delay` would add a production seam for a sub-microsecond race; a
+  probabilistic test would encode an environmental result. A genuine client-disconnect mid-stream is
+  covered on both endpoints.
 
 ## 2026-09-13 wave `leftovers` (issues #19, #22, #25, #26, #34, #35)
 
@@ -307,20 +321,7 @@ rest of both issues stays open, as does the CI job.
 
 ## Chunk 4 review deferrals
 
-- **The drain is unbounded and silent.** The streaming handler cancels the generation, awaits it to
-  completion, and only then disposes the context (D51). A runtime that never completes after being
-  cancelled therefore parks the request and its context forever, with nothing in the log to say so. The
-  fix is a warning after N seconds still waiting, naming the request id. A timeout that gives up and
-  disposes anyway would be the wrong fix: disposing a context whose operation is still running is
-  exactly the use-after-dispose D51 removed, and a timeout would reinstate it under a different name.
-  If the wait ever has to be bounded, the context has to be leaked deliberately (handed to a reaper
-  that disposes it when the operation finally ends) rather than disposed on time. Unobserved so far:
-  the fake always completes, and neither runtime has been seen to hang after a cancel. **The stakes
-  went up in chunk 8.** The consequence used to be one parked request and one parked context; with the
-  scheduler behind it, a generation that never completes after its cancel parks the single worker as
-  well, and with the worker every request queued behind it, until the drain grace period at shutdown.
-  Issue #4 asked for the warning itself and it was not implemented in chunk 8; it is now an issue of
-  its own.
+- **The drain warning is implemented.** SQ-44, SQ-53, SQ-55 and SQ-56 added periodic warnings while a cancelled generation drains, with no timeout and no dispose; see D104.
 - **Keep-alive covers only the wait for the first token.** Once deltas start flowing the comments stop,
   so a long stall *between* tokens (a model that pauses mid-generation, or a machine under load) can
   still trip a proxy's idle timeout even though the request is healthy. A keep-alive driven by "time
