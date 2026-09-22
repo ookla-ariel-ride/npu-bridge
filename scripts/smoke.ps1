@@ -433,7 +433,7 @@ if (-not $NoStart) {
 
 try {
     # --- wait for ready -----------------------------------------------------
-    Step 'healthz becomes ready' -Pins @('D77', 'D79', '#15') {
+    Step 'healthz becomes ready' -Pins @('D77', 'D79', '#15', '#17', 'D104') {
         $deadline = (Get-Date).AddSeconds($ReadyTimeoutSeconds)
         $last = $null
         while ((Get-Date) -lt $deadline) {
@@ -457,6 +457,18 @@ try {
         $script:servedModel = $last.model
         if ([string]::IsNullOrWhiteSpace($servedModel)) { throw '/healthz carries no model id' }
 
+        $expectedCapabilities = if ($Backend -eq 'aion') {
+            @()
+        }
+        else {
+            @('sampling_options', 'system_prompt_context', 'prompt_length_preflight', 'cancellation')
+        }
+        if ($null -eq $last.capabilities) { throw '/healthz carries no capabilities array' }
+        $actualCapabilities = @($last.capabilities)
+        if (($actualCapabilities -join ',') -cne ($expectedCapabilities -join ',')) {
+            throw "/healthz capabilities='$($actualCapabilities -join ',')', expected '$($expectedCapabilities -join ',')' for $Backend"
+        }
+
         # What ready has to mean per backend, so a start without identity, or one whose runtime
         # bootstrap was skipped, cannot pass as healthy (issue #15). Phi Silica cannot be ready without
         # identity, whoever started it. The fake and aion run by path when this script starts them and
@@ -466,7 +478,7 @@ try {
             if ($last.diagnostics.bootstrap -ne 'ok') { throw "phi-silica diagnostics.bootstrap='$($last.diagnostics.bootstrap)', expected 'ok'" }
         }
         elseif (-not $NoStart -and $last.package_identity -ne $false) { throw "$Backend reports package_identity=$($last.package_identity); started by path, it should have none" }
-        "backend=$($last.backend) model=$($last.model) identity=$($last.package_identity) loading=$($last.loading_seconds)s diagnostics=$($last.diagnostics | ConvertTo-Json -Compress)"
+        "backend=$($last.backend) model=$($last.model) identity=$($last.package_identity) capabilities=$($actualCapabilities -join ',') loading=$($last.loading_seconds)s diagnostics=$($last.diagnostics | ConvertTo-Json -Compress)"
     }
 
     Step 'startup fails promptly when the listen port is already in use' -Pins @('D37', '#15') {

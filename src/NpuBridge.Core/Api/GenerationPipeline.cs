@@ -116,6 +116,66 @@ internal static class GenerationPipeline
     }
 
     /// <summary>
+    /// Awaits a cancelled generation without ever bounding that wait. The context cannot be settled while
+    /// its backend operation may still be using it (D51), so this only observes a slow drain; it never
+    /// turns one into a timeout. Both response shapes use this at their cancel-drain-settle boundary.
+    ///
+    /// A generation that has already ended takes the fast path below, which is what lets a caller drain
+    /// unconditionally rather than guarding the call: the streamed shapes' <c>finally</c> is the single
+    /// settlement point for every outcome, most of which reach it with the task long since completed,
+    /// and a token source plus a timer per ordinary request is a price worth not paying for a wait that
+    /// is not happening. Nothing is lost by skipping the loop — the task's own exception still comes
+    /// back through the same await, and there is no elapsed wait to report.
+    /// </summary>
+    public static async Task<T> DrainWithWarningsAsync<T>(
+        Task<T> generation,
+        int warningSeconds,
+        TimeProvider time,
+        ILogger logger,
+        string requestId,
+        string shape)
+    {
+        if (generation.IsCompleted)
+        {
+            return await generation.ConfigureAwait(false);
+        }
+
+        var interval = TimeSpan.FromSeconds(warningSeconds);
+        var started = time.GetTimestamp();
+        var warned = false;
+
+        using var stopWarningDelay = new CancellationTokenSource();
+        try
+        {
+            while (!generation.IsCompleted)
+            {
+                var nextWarning = Task.Delay(interval, time, stopWarningDelay.Token);
+                if (await Task.WhenAny(generation, nextWarning).ConfigureAwait(false) == generation || generation.IsCompleted)
+                {
+                    break;
+                }
+
+                warned = true;
+                var waitedSeconds = (long)Math.Floor(time.GetElapsedTime(started).TotalSeconds);
+                logger.LogWarning("req={RequestId} shape={Shape} generation drain is still waiting after {SecondsWaited}s.",
+                    requestId, shape, waitedSeconds);
+            }
+
+            return await generation.ConfigureAwait(false);
+        }
+        finally
+        {
+            stopWarningDelay.Cancel();
+            if (warned)
+            {
+                var waitedSeconds = (long)Math.Floor(time.GetElapsedTime(started).TotalSeconds);
+                logger.LogInformation("req={RequestId} shape={Shape} generation drain completed after {SecondsWaited}s.",
+                    requestId, shape, waitedSeconds);
+            }
+        }
+    }
+
+    /// <summary>
     /// The log line's <c>cache=</c> field: <c>hit</c>, <c>miss</c>, or <c>-</c> for a request that never
     /// got as far as a context. Four copies of this one expression existed — one per endpoint — until
     /// <see cref="StreamingPipeline"/> took two of them and <see cref="JsonPipeline"/> the other two;

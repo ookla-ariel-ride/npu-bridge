@@ -3,9 +3,13 @@ using System.Globalization;
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Time.Testing;
+using NpuBridge.Api;
 using NpuBridge.Backends;
 using NpuBridge.Backends.Fake;
+using NpuBridge.Configuration;
 
 namespace NpuBridge.Tests;
 
@@ -704,6 +708,148 @@ public class ChatCompletionsStreamingTests
     }
 
     /// <summary>
+    /// A cancelled stream still owns its context until the backend completes. The fake ignores the
+    /// cancellation while both gates are closed, so advancing the injected clock proves that the shared
+    /// drain watcher warns periodically without making the wait bounded.
+    /// </summary>
+    [Fact]
+    public async Task A_cancelled_stream_drain_warns_periodically_until_it_completes()
+    {
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var clock = new FakeTimeProvider(new DateTimeOffset(2026, 9, 21, 12, 0, 0, TimeSpan.Zero));
+        var capture = new CapturingLoggerProvider();
+        var fake = new FakeBackend(new FakeBackendOptions
+        {
+            Responder = _ => ["Hello", " world"],
+            CancellationGate = gate,
+            DeltaGate = gate,
+            DeltaGateAfterTokens = 1,
+        });
+        await using var host = await BridgeTestHost.StartAsync(fake,
+            new BridgeOptions { Backend = BackendKind.Fake, DrainWarningSeconds = 60 },
+            time: clock,
+            loggerProvider: capture);
+
+        var responseTask = host.Client.PostAsJsonAsync(Path, new
+        {
+            model = "fake",
+            stream = true,
+            max_tokens = 1,
+            messages = new[] { new { role = "user", content = "say hi" } },
+        });
+
+        await TestWait.UntilAsync(() => fake.CancellationsObserved == 1);
+
+        await TestWait.UntilAsync(() =>
+        {
+            clock.Advance(TimeSpan.FromSeconds(60));
+            return capture.Records.Count(r => r.Level == LogLevel.Warning
+                && r.Message.Contains("generation drain is still waiting", StringComparison.Ordinal)) == 1;
+        });
+        var firstWarning = Assert.Single(capture.Records, r => r.Level == LogLevel.Warning
+            && r.Message.Contains("generation drain is still waiting", StringComparison.Ordinal));
+        Assert.StartsWith("req=chatcmpl-", firstWarning.Message, StringComparison.Ordinal);
+        Assert.Contains("shape=chat-stream", firstWarning.Message, StringComparison.Ordinal);
+        Assert.Contains("after 60s", firstWarning.Message, StringComparison.Ordinal);
+
+        clock.Advance(TimeSpan.FromSeconds(60));
+        await TestWait.UntilAsync(() => capture.Records.Count(r => r.Level == LogLevel.Warning
+            && r.Message.Contains("generation drain is still waiting", StringComparison.Ordinal)) == 2);
+
+        gate.SetResult();
+        using var response = await responseTask;
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        await TestWait.UntilAsync(() => capture.Records.Any(r => r.Level == LogLevel.Information
+            && r.Message.Contains("generation drain completed", StringComparison.Ordinal)));
+        var completed = Assert.Single(capture.Records, r => r.Level == LogLevel.Information
+            && r.Message.Contains("generation drain completed", StringComparison.Ordinal));
+        Assert.Contains("req=chatcmpl-", completed.Message, StringComparison.Ordinal);
+        Assert.Contains("shape=chat-stream", completed.Message, StringComparison.Ordinal);
+        Assert.Contains("after 120s", completed.Message, StringComparison.Ordinal);
+
+        clock.Advance(TimeSpan.FromSeconds(60));
+        Assert.Equal(2, capture.Records.Count(r => r.Level == LogLevel.Warning
+            && r.Message.Contains("generation drain is still waiting", StringComparison.Ordinal)));
+        host.AssertNoLeak();
+    }
+
+    /// <summary>
+    /// Issue #28's own scenario, and the one interleaving three rounds of fixes kept missing: the
+    /// client aborts after the first frame, the backend then emits no further delta, and it ignores the
+    /// cancel. There is no write left to fail and no cut to break the loop, so the only thing that can
+    /// get the request to its cancel-drain-dispose <c>finally</c> is the reader loop's own token. With
+    /// the read on <c>CancellationToken.None</c> this parks forever on a channel the generation will
+    /// never complete: the context stays held and nothing is ever logged about it.
+    ///
+    /// No <c>max_tokens</c>, deliberately — a budget makes the cutter fire and the cut path drains
+    /// through a different call, which is how this test passed while the defect it names was live.
+    /// </summary>
+    [Fact]
+    public async Task A_streamed_abort_with_no_further_delta_drain_warns_periodically_until_it_completes()
+    {
+        var cancellationGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var deltaGate = cancellationGate;
+        var clock = new FakeTimeProvider(new DateTimeOffset(2026, 9, 21, 12, 0, 0, TimeSpan.Zero));
+        var capture = new CapturingLoggerProvider();
+        var fake = new FakeBackend(new FakeBackendOptions
+        {
+            Responder = _ => ["Hello", " world"],
+            CancellationGate = cancellationGate,
+            DeltaGate = deltaGate,
+            DeltaGateAfterTokens = 1,
+        });
+        await using var host = await BridgeTestHost.StartAsync(fake,
+            new BridgeOptions { Backend = BackendKind.Fake, DrainWarningSeconds = 60 },
+            time: clock,
+            loggerProvider: capture);
+
+        using var cts = new CancellationTokenSource();
+        using var request = new HttpRequestMessage(HttpMethod.Post, Path)
+        {
+            Content = JsonContent.Create(new
+            {
+                model = "fake",
+                stream = true,
+                messages = new[] { new { role = "user", content = "say hi" } },
+            }),
+        };
+
+        using var response = await host.Client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cts.Token);
+        await using (var stream = await response.Content.ReadAsStreamAsync(cts.Token))
+        {
+            var buffer = new byte[128];
+            Assert.True(await stream.ReadAsync(buffer, cts.Token) > 0);
+        }
+
+        // The client goes away. Releasing the response stream is what the server sees as the abort —
+        // cancelling the send token alone only ends the client's own read — so the two known-good
+        // disconnect tests in this file do both, in this order, and so does this one.
+        await cts.CancelAsync();
+        try
+        {
+            await TestWait.UntilAsync(() =>
+            {
+                clock.Advance(TimeSpan.FromSeconds(60));
+                return capture.Records.Any(r => r.Level == LogLevel.Warning
+                    && r.Message.Contains("generation drain is still waiting", StringComparison.Ordinal)
+                    && r.Message.Contains("shape=chat-stream", StringComparison.Ordinal));
+            });
+
+            var warning = Assert.Single(capture.Records, r => r.Level == LogLevel.Warning
+                && r.Message.Contains("generation drain is still waiting", StringComparison.Ordinal));
+            Assert.StartsWith("req=chatcmpl-", warning.Message, StringComparison.Ordinal);
+            Assert.Contains("shape=chat-stream", warning.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            cancellationGate.SetResult();
+        }
+
+        await TestWait.UntilAsync(() => fake.ActiveContexts == 0);
+        host.AssertNoLeak();
+    }
+
+    /// <summary>
     /// The critical one. A client that disappears mid-stream makes the next response write throw, and
     /// that exception used to unwind straight into the <c>finally</c> that disposes the model context —
     /// while the generation was still running against it. On the real backends that is a use-after-free
@@ -942,8 +1088,8 @@ public class ChatCompletionsStreamingTests
     /// there instead. The negative row is deterministic. The zero row has one window: the gate is
     /// released once the backend has been called, which happens a few instructions before the handler
     /// enters its wait, so a delta that reached the channel in that gap would let a missing branch
-    /// pass by a first wait that had already been satisfied. Closing it needs the keep-alive delays
-    /// driven by the injected <see cref="TimeProvider"/>, filed rather than done here.
+    /// pass by a first wait that had already been satisfied. Closing it can now use the keep-alive
+    /// delays driven by the injected <see cref="TimeProvider"/>.
     /// </summary>
     [Theory]
     [InlineData(0)]
@@ -983,8 +1129,8 @@ public class ChatCompletionsStreamingTests
     /// <c>Task.Delay</c>, and without the fallback the request would fail before its first frame. What
     /// this cannot pin is the delay actually used: the code falls back to the interval, but a fallback
     /// to zero, or to any other non-negative span, would pass these assertions too. Pinning the value
-    /// needs the keep-alive delays driven by the injected <see cref="TimeProvider"/>, which is filed
-    /// rather than done here.
+    /// needs the keep-alive delays driven by the injected <see cref="TimeProvider"/>, which is now
+    /// available.
     /// </summary>
     [Theory]
     [InlineData(0)]

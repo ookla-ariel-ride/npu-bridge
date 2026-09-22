@@ -63,7 +63,7 @@ internal sealed class CompletionsStreamEndpoint
         // the last instant before the first frame commits the response, and only while no drop is in
         // progress -- the preflight loop inside Acquire, or the status-driven retry's own
         // TryDropOldestExchange below, both of which clear the flag before the count moves.
-        var sse = new SseStream(http.Response, () => session.ApplyTruncationHeaderIfSettled(http.Response));
+        var sse = new SseStream(http.Response, CreateBeforeHeadersHook(session, http.Response));
         var stopwatch = Stopwatch.StartNew();
 
         // The client-side cut. Runs on the single channel reader, never on the backend's callback
@@ -173,7 +173,8 @@ internal sealed class CompletionsStreamEndpoint
             if (generation.IsCompleted)
             {
                 var immediateResult = await StreamingPipeline.ReportSchedulerOutcomeAsync(
-                    generation, sse, http, logger, requestId, backendName, prepared, session, generationHealth, backendCalls, () => attemptDurationMs, aborted)
+                    generation, sse, http, logger, requestId, backendName, prepared, session, generationHealth, backendCalls,
+                    () => attemptDurationMs, aborted)
                     .ConfigureAwait(false);
                 if (immediateResult.Handled)
                 {
@@ -183,15 +184,16 @@ internal sealed class CompletionsStreamEndpoint
 
             // Nothing has been written yet, on purpose: waiting here is what keeps the status line
             // available for a failure that arrives before the first token.
-            streamed = await StreamingPipeline.WaitForFirstDeltaAsync(sse, channel.Reader, streaming, aborted)
+            streamed = await StreamingPipeline.WaitForFirstDeltaAsync(sse, channel.Reader, streaming, time, aborted)
                 .ConfigureAwait(false);
 
             GenerationResult result;
             if (streamed)
             {
-                // Deliberately not cancelled by `aborted`: the loop must end when the channel completes,
-                // so that `generation` is always reached and always drained below.
-                await foreach (var delta in channel.Reader.ReadAllAsync(CancellationToken.None).ConfigureAwait(false))
+                // Cancelled by `aborted`, and the channel completing still ends it normally -- the same
+                // two exits, for the same two reasons, as the chat shape's loop; see
+                // ChatCompletionsStreamEndpoint for the full account of why both are needed.
+                await foreach (var delta in channel.Reader.ReadAllAsync(aborted).ConfigureAwait(false))
                 {
                     var release = cutter.Accept(delta);
                     if (release.Length > 0)
@@ -211,8 +213,15 @@ internal sealed class CompletionsStreamEndpoint
                     }
                 }
 
+                if (cancelledByCut)
+                {
+                    await GenerationPipeline.DrainWithWarningsAsync(
+                        generation, options.DrainWarningSeconds, time, logger, requestId, "completions-stream").ConfigureAwait(false);
+                }
+
                 var schedulerOutcome = await StreamingPipeline.ReportSchedulerOutcomeAsync(
-                    generation, sse, http, logger, requestId, backendName, prepared, session, generationHealth, backendCalls, () => attemptDurationMs, aborted)
+                    generation, sse, http, logger, requestId, backendName, prepared, session, generationHealth, backendCalls,
+                    () => attemptDurationMs, aborted)
                     .ConfigureAwait(false);
                 if (schedulerOutcome.Handled)
                 {
@@ -225,7 +234,8 @@ internal sealed class CompletionsStreamEndpoint
             else
             {
                 var schedulerOutcome = await StreamingPipeline.ReportSchedulerOutcomeAsync(
-                    generation, sse, http, logger, requestId, backendName, prepared, session, generationHealth, backendCalls, () => attemptDurationMs, aborted)
+                    generation, sse, http, logger, requestId, backendName, prepared, session, generationHealth, backendCalls,
+                    () => attemptDurationMs, aborted)
                     .ConfigureAwait(false);
                 if (schedulerOutcome.Handled)
                 {
@@ -350,7 +360,11 @@ internal sealed class CompletionsStreamEndpoint
             {
                 try
                 {
-                    await generation.ConfigureAwait(false);
+                    // Unconditionally through the warning drain, as on the chat shape: it costs nothing
+                    // once the task has ended, and a job still queued is the one case where the wait is
+                    // both unbounded and silent.
+                    await GenerationPipeline.DrainWithWarningsAsync(
+                        generation, options.DrainWarningSeconds, time, logger, requestId, "completions-stream").ConfigureAwait(false);
                 }
                 catch (Exception ex)
                 {
@@ -364,6 +378,13 @@ internal sealed class CompletionsStreamEndpoint
             Volatile.Read(ref currentGenerationCts)?.Dispose();
         }
     }
+
+    /// <summary>
+    /// The one-time first-frame callback: it must run on the request thread while the response is still
+    /// mutable, because the scheduler worker may be changing the truncation count concurrently.
+    /// </summary>
+    internal static Action CreateBeforeHeadersHook(ConversationSession session, HttpResponse response) =>
+        () => session.ApplyTruncationHeaderIfSettled(response);
 
     /// <summary>
     /// One content-bearing chunk. With <paramref name="nullUsage"/> (the request asked for usage) it

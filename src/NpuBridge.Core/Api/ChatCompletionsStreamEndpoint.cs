@@ -262,7 +262,8 @@ internal sealed class ChatCompletionsStreamEndpoint
             if (generation.IsCompleted)
             {
                 var immediateResult = await StreamingPipeline.ReportSchedulerOutcomeAsync(
-                    generation, sse, http, logger, requestId, backendName, prepared, session, generationHealth, backendCalls, () => attemptDurationMs, aborted)
+                    generation, sse, http, logger, requestId, backendName, prepared, session, generationHealth, backendCalls,
+                    () => attemptDurationMs, aborted)
                     .ConfigureAwait(false);
                 if (immediateResult.Handled)
                 {
@@ -273,7 +274,7 @@ internal sealed class ChatCompletionsStreamEndpoint
             // Nothing has been written yet, on purpose. Waiting here — rather than opening with the
             // role chunk — is what keeps the status line available for a failure that arrives before
             // the first token. The first keep-alive comment is what ends that window, about a second in.
-            streamed = await StreamingPipeline.WaitForFirstDeltaAsync(sse, channel.Reader, streaming, aborted)
+            streamed = await StreamingPipeline.WaitForFirstDeltaAsync(sse, channel.Reader, streaming, time, aborted)
                 .ConfigureAwait(false);
 
             GenerationResult result;
@@ -283,14 +284,17 @@ internal sealed class ChatCompletionsStreamEndpoint
                 // still decides the cut, so a tool-call reply is capped and stopped exactly as a
                 // streamed one is; what it releases is accumulated rather than written, and read
                 // from EmittedText in the tail.
-                if (await DrainBufferedAsync(sse, channel.Reader, cutter, streaming,
+                if (await DrainBufferedAsync(sse, channel.Reader, cutter, streaming, time,
                         () => currentGenerationCts!, logger, requestId, aborted).ConfigureAwait(false))
                 {
                     cancelledByCut = true;
+                    await GenerationPipeline.DrainWithWarningsAsync(
+                        generation, options.DrainWarningSeconds, time, logger, requestId, "chat-stream").ConfigureAwait(false);
                 }
 
                 var schedulerOutcome = await StreamingPipeline.ReportSchedulerOutcomeAsync(
-                    generation, sse, http, logger, requestId, backendName, prepared, session, generationHealth, backendCalls, () => attemptDurationMs, aborted)
+                    generation, sse, http, logger, requestId, backendName, prepared, session, generationHealth, backendCalls,
+                    () => attemptDurationMs, aborted)
                     .ConfigureAwait(false);
                 if (schedulerOutcome.Handled)
                 {
@@ -307,9 +311,19 @@ internal sealed class ChatCompletionsStreamEndpoint
                 await sse.WriteChunkAsync(Chunk(requestId, created, model, includeUsage,
                     new ChatCompletionDelta("assistant", string.Empty), finishReason: null), aborted).ConfigureAwait(false);
 
-                // Deliberately not cancelled by `aborted`: the loop must end when the channel completes,
-                // so that `generation` is always reached and always drained below.
-                await foreach (var delta in channel.Reader.ReadAllAsync(CancellationToken.None).ConfigureAwait(false))
+                // Cancelled by `aborted`, and the channel completing still ends it normally: both exits
+                // are needed and they answer different questions. The channel is what ends the loop when
+                // the generation ends, on every outcome it can have -- that is what keeps `generation`
+                // reachable and drained. `aborted` is what ends it when the client leaves and the
+                // backend then produces nothing further: the read would otherwise park on a channel the
+                // runtime is never going to complete, and nothing would reach the finally below, where
+                // the cancel, the warning drain and the disposal all live (D51). The
+                // OperationCanceledException that ends it lands in the client-gone catch clause -- the
+                // same one that already answers for a chunk write that failed for the same reason -- so
+                // every abort leaves this method by the one route, and the drain warns for as long as an
+                // uncooperative runtime holds the context. The cut still leaves by its own `break`
+                // below, with its own drain ahead of the finally.
+                await foreach (var delta in channel.Reader.ReadAllAsync(aborted).ConfigureAwait(false))
                 {
                     // What the cutter releases, not the delta: with stop strings configured this lags
                     // the backend by up to Holdback characters, and on the delta that trips a limit it
@@ -340,8 +354,15 @@ internal sealed class ChatCompletionsStreamEndpoint
                     }
                 }
 
+                if (cancelledByCut)
+                {
+                    await GenerationPipeline.DrainWithWarningsAsync(
+                        generation, options.DrainWarningSeconds, time, logger, requestId, "chat-stream").ConfigureAwait(false);
+                }
+
                 var schedulerOutcome = await StreamingPipeline.ReportSchedulerOutcomeAsync(
-                    generation, sse, http, logger, requestId, backendName, prepared, session, generationHealth, backendCalls, () => attemptDurationMs, aborted)
+                    generation, sse, http, logger, requestId, backendName, prepared, session, generationHealth, backendCalls,
+                    () => attemptDurationMs, aborted)
                     .ConfigureAwait(false);
                 if (schedulerOutcome.Handled)
                 {
@@ -354,7 +375,8 @@ internal sealed class ChatCompletionsStreamEndpoint
             else
             {
                 var schedulerOutcome = await StreamingPipeline.ReportSchedulerOutcomeAsync(
-                    generation, sse, http, logger, requestId, backendName, prepared, session, generationHealth, backendCalls, () => attemptDurationMs, aborted)
+                    generation, sse, http, logger, requestId, backendName, prepared, session, generationHealth, backendCalls,
+                    () => attemptDurationMs, aborted)
                     .ConfigureAwait(false);
                 if (schedulerOutcome.Handled)
                 {
@@ -597,7 +619,13 @@ internal sealed class ChatCompletionsStreamEndpoint
             {
                 try
                 {
-                    await generation.ConfigureAwait(false);
+                    // Unconditionally through the warning drain, which now costs nothing when the task
+                    // has already ended: the branch this replaced took a plain await whenever no
+                    // generation had started, and a job still sitting in the queue when this method
+                    // unwinds for some reason other than its own token is exactly the case where the
+                    // wait is unbounded and silent.
+                    await GenerationPipeline.DrainWithWarningsAsync(
+                        generation, options.DrainWarningSeconds, time, logger, requestId, "chat-stream").ConfigureAwait(false);
                 }
                 catch (Exception ex)
                 {
@@ -649,6 +677,7 @@ internal sealed class ChatCompletionsStreamEndpoint
         ChannelReader<string> reader,
         OutputCutter cutter,
         StreamingOptions streaming,
+        TimeProvider time,
         Func<CancellationTokenSource> currentGenerationCts,
         ILogger logger,
         string requestId,
@@ -706,7 +735,7 @@ internal sealed class ChatCompletionsStreamEndpoint
 
             // WaitForDeltaAsync writes its own keep-alive if this wait runs the whole way out, so the
             // deadline is reset whenever it does — hence the assignment on both branches.
-            more = await StreamingPipeline.WaitForDeltaAsync(sse, reader, streaming, remaining, cancellationToken).ConfigureAwait(false);
+            more = await StreamingPipeline.WaitForDeltaAsync(sse, reader, streaming, remaining, time, cancellationToken).ConfigureAwait(false);
             if (!more || Stopwatch.GetTimestamp() >= due)
             {
                 due = Stopwatch.GetTimestamp() + (long)(streaming.KeepAliveInterval.TotalSeconds * Stopwatch.Frequency);

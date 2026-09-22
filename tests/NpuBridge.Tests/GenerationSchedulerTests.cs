@@ -20,6 +20,9 @@ public class GenerationSchedulerTests
     private static GenerationScheduler NewScheduler(int queueCapacity = 4, TimeProvider? time = null) =>
         new(new BridgeOptions { QueueCapacity = queueCapacity }, time ?? TimeProvider.System, NullLogger<GenerationScheduler>.Instance);
 
+    private static GenerationScheduler.QueuedJob<string> NewQueuedJob(Action onLeftQueue, CancellationToken cancellationToken) =>
+        new(_ => Task.FromResult("unused"), T0, TimeProvider.System, onLeftQueue, cancellationToken);
+
     [Fact]
     public async Task Jobs_run_one_at_a_time()
     {
@@ -33,9 +36,9 @@ public class GenerationSchedulerTests
 
             var taskA = scheduler.ScheduleAsync<string>(async ct =>
             {
-                lock (order) { order.Add(1); }
                 startedA.TrySetResult();
                 await gateA.Task.WaitAsync(ct).ConfigureAwait(false);
+                lock (order) { order.Add(1); }
                 return "a";
             }, CancellationToken.None);
 
@@ -48,7 +51,9 @@ public class GenerationSchedulerTests
             }, CancellationToken.None);
 
             // Structural, not timing-based: the worker is a single reader awaiting A's body to
-            // completion, and A's body is parked on gateA, so B cannot have been dequeued yet.
+            // completion, and A's body is parked on gateA, so B cannot have been dequeued yet. The
+            // order.Add(1) after gateA also strengthens the final order assertion: a concurrent B
+            // would produce [2, 1], not [1, 2].
             lock (order)
             {
                 Assert.DoesNotContain(2, order);
@@ -575,36 +580,42 @@ public class GenerationSchedulerTests
     {
         var scheduler = NewScheduler();
         await scheduler.StartAsync(CancellationToken.None);
-
-        var gateA = new TaskCompletionSource();
-        var startedA = new TaskCompletionSource();
-        var taskA = scheduler.ScheduleAsync<string>(async ct =>
+        try
         {
-            startedA.TrySetResult();
-            await gateA.Task.WaitAsync(ct).ConfigureAwait(false);
-            return "a";
-        }, CancellationToken.None);
-        await startedA.Task; // A is running and holds the worker.
+            var gateA = new TaskCompletionSource();
+            var startedA = new TaskCompletionSource();
+            var taskA = scheduler.ScheduleAsync<string>(async ct =>
+            {
+                startedA.TrySetResult();
+                await gateA.Task.WaitAsync(ct).ConfigureAwait(false);
+                return "a";
+            }, CancellationToken.None);
+            await startedA.Task; // A is running and holds the worker.
 
-        var bodyRanB = false;
-        var taskB = scheduler.ScheduleAsync<string>(ct =>
+            var bodyRanB = false;
+            var taskB = scheduler.ScheduleAsync<string>(ct =>
+            {
+                bodyRanB = true;
+                return Task.FromResult("b");
+            }, CancellationToken.None);
+            await TestWait.UntilAsync(() => scheduler.QueueDepth == 1); // B confirmed still queued.
+
+            // Shutdown is requested while B is provably still sitting in the channel and A is provably
+            // still running (parked on gateA): the worker cannot have reached B yet.
+            var stopTask = scheduler.StopAsync(CancellationToken.None);
+            gateA.SetResult(); // let A finish so shutdown's drain can proceed; this is D51, not suspended for shutdown.
+            var resultA = await taskA;
+            await stopTask.WaitAsync(TimeSpan.FromSeconds(10)); // fails this named test instead of hanging the suite.
+
+            var resultB = await taskB;
+            Assert.Equal(ScheduleResultKind.Completed, resultA.Kind);
+            Assert.Equal(ScheduleResultKind.Cancelled, resultB.Kind);
+            Assert.False(bodyRanB);
+        }
+        finally
         {
-            bodyRanB = true;
-            return Task.FromResult("b");
-        }, CancellationToken.None);
-        await TestWait.UntilAsync(() => scheduler.QueueDepth == 1); // B confirmed still queued.
-
-        // Shutdown is requested while B is provably still sitting in the channel and A is provably
-        // still running (parked on gateA): the worker cannot have reached B yet.
-        var stopTask = scheduler.StopAsync(CancellationToken.None);
-        gateA.SetResult(); // let A finish so shutdown's drain can proceed; this is D51, not suspended for shutdown.
-        var resultA = await taskA;
-        await stopTask; // does not hang: B is drained as cancelled, then the worker exits.
-
-        var resultB = await taskB;
-        Assert.Equal(ScheduleResultKind.Completed, resultA.Kind);
-        Assert.Equal(ScheduleResultKind.Cancelled, resultB.Kind);
-        Assert.False(bodyRanB);
+            await scheduler.DisposeAsync();
+        }
     }
 
     [Fact]
@@ -741,27 +752,125 @@ public class GenerationSchedulerTests
         }
     }
 
+    [Fact]
+    public void Queue_depth_gate_dequeued_before_entered_leaves_exactly_once()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var leftQueue = 0;
+        var job = NewQueuedJob(() => leftQueue++, cancellation.Token);
+        job.ArmCancellationCompletion();
+        try
+        {
+            job.MarkDequeued();
+            Assert.Equal(0, leftQueue); // The counter was not armed when the worker dequeued it.
+
+            job.MarkEnteredQueue();
+            Assert.Equal(1, leftQueue);
+            cancellation.Cancel();
+            Assert.Equal(1, leftQueue);
+        }
+        finally
+        {
+            job.DisposeCancellationRegistration();
+        }
+    }
+
+    [Fact]
+    public void Queue_depth_gate_cancelled_before_entered_leaves_exactly_once()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var leftQueue = 0;
+        var job = NewQueuedJob(() => leftQueue++, cancellation.Token);
+        job.ArmCancellationCompletion();
+        try
+        {
+            cancellation.Cancel(); // Drives the registered cancellation callback synchronously.
+            Assert.Equal(0, leftQueue); // Cancellation cannot remove a job not yet counted.
+
+            job.MarkEnteredQueue();
+            Assert.Equal(1, leftQueue);
+            job.MarkDequeued();
+            Assert.Equal(1, leftQueue);
+        }
+        finally
+        {
+            job.DisposeCancellationRegistration();
+        }
+    }
+
+    [Fact]
+    public void Queue_depth_gate_cancelled_after_dequeued_leaves_exactly_once()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var leftQueue = 0;
+        var job = NewQueuedJob(() => leftQueue++, cancellation.Token);
+        job.ArmCancellationCompletion();
+        try
+        {
+            job.MarkDequeued();
+            Assert.Equal(0, leftQueue); // Dequeue cannot leave before the job was counted.
+
+            cancellation.Cancel();
+            Assert.Equal(0, leftQueue); // Neither signal may decrement an unarmed depth.
+            job.MarkEnteredQueue();
+            Assert.Equal(1, leftQueue);
+        }
+        finally
+        {
+            job.DisposeCancellationRegistration();
+        }
+    }
+
+    [Fact]
+    public void Queue_depth_gate_entered_then_cancelled_then_dequeued_leaves_exactly_once()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var leftQueue = 0;
+        var job = NewQueuedJob(() => leftQueue++, cancellation.Token);
+        job.ArmCancellationCompletion();
+        try
+        {
+            job.MarkEnteredQueue();
+            Assert.Equal(0, leftQueue);
+
+            cancellation.Cancel();
+            Assert.Equal(1, leftQueue);
+            job.MarkDequeued();
+            Assert.Equal(1, leftQueue);
+        }
+        finally
+        {
+            job.DisposeCancellationRegistration();
+        }
+    }
+
+    [Fact]
+    public void Queue_depth_gate_dequeued_then_cancelled_leaves_exactly_once()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var leftQueue = 0;
+        var job = NewQueuedJob(() => leftQueue++, cancellation.Token);
+        job.ArmCancellationCompletion();
+        try
+        {
+            job.MarkEnteredQueue();
+            job.MarkDequeued();
+            Assert.Equal(1, leftQueue);
+
+            cancellation.Cancel();
+            Assert.Equal(1, leftQueue);
+        }
+        finally
+        {
+            job.DisposeCancellationRegistration();
+        }
+    }
+
     /// <summary>
-    /// Task 3b review fix round 1, Finding 1. <c>ScheduleAsync</c> arms <c>_liveQueueDepth</c>'s
-    /// counter (<c>Interlocked.Increment</c>, then <c>MarkEnteredQueue</c>) two statements after
-    /// <c>TryWrite</c> hands the job to the channel -- and a worker parked in <c>WaitToReadAsync</c> can
-    /// wake, dequeue, run and complete a trivial job in that gap. When it does, the worker's own
-    /// <c>MarkDequeued</c>-&gt;<c>LeaveQueueIfNeeded</c> call sees the counter not yet armed and returns
-    /// without decrementing, and nothing calls it again: the job that was never really "left waiting"
-    /// stays counted forever, and <c>/healthz</c>'s <c>queue_depth</c> (and the <c>Retry-After</c> it
-    /// feeds) drifts upward for the rest of the process's life.
-    ///
-    /// The window is a handful of instructions wide and cannot be forced open on a specific call, so
-    /// this widens the odds of landing in it instead of trying to pin it exactly: many trivial,
-    /// instantly-completing jobs scheduled one after another, so the worker is essentially always
-    /// freshly parked and immediately eligible to race the very next enqueue. Before the fix this failed
-    /// intermittently under that load (matching the reviewer's own reproduction rate on the neighbouring
-    /// <see cref="A_job_that_throws_faults_its_own_caller_without_wedging_the_worker"/> test, which
-    /// exercises the identical race on a single pair of jobs); after it, <c>MarkEnteredQueue</c>'s own
-    /// retry against <c>_dequeued</c> makes the outcome the same whichever of the two threads gets there
-    /// first, so every one of these iterations leaves the counter exactly where it started regardless of
-    /// which way the race actually broke on this run -- no wall clock involved (D54), only the counter's
-    /// own value once every job has been awaited to completion.
+    /// Integration-level companion to the deterministic
+    /// <see cref="Queue_depth_gate_cancelled_before_entered_leaves_exactly_once"/> tests above. Those
+    /// tests pin both publish-before-arm orderings directly; this one retains the real worker/channel
+    /// path as a guard that completed jobs leave <c>QueueDepth</c> at zero.
     /// </summary>
     [Fact]
     public async Task Rapid_back_to_back_jobs_never_leave_the_depth_counter_stuck_above_zero()

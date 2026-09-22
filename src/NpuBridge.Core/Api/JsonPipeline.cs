@@ -57,6 +57,7 @@ internal static class JsonPipeline
         GenerationHealth generationHealth,
         TimeProvider time,
         ILogger logger,
+        string shape,
         Func<JsonReply, TResponse> respond)
     {
         var requestId = prepared.RequestId;
@@ -175,12 +176,14 @@ internal static class JsonPipeline
                         // generation drains. It must not count as a cut: only a normal watcher signal
                         // lets a Cancelled backend result map to the client-side cut outcome.
                         //
-                        // Skipped when the request set no limits: there is no watcher, so nothing can
-                        // ever complete the other half of the race, and awaiting the generation alone
-                        // says the same.
+                        // When no limits are set, the cancellation signal still wakes this wait when the
+                        // client leaves. That takes the same warning drain as a cut, so the lease remains
+                        // owned until an uncooperative backend has actually finished.
+                        var drainAfterCancellation = false;
+                        var cancellationSignal = Task.Delay(Timeout.InfiniteTimeSpan, generationCts.Token);
                         if (watcher is not null)
                         {
-                            await Task.WhenAny(generation, watcher.Signal).ConfigureAwait(false);
+                            await Task.WhenAny(generation, watcher.Signal, cancellationSignal).ConfigureAwait(false);
                             if (watcher.Signal.IsCompleted)
                             {
                                 var watcherFaulted = sink.BridgeFault is not null;
@@ -190,10 +193,18 @@ internal static class JsonPipeline
                                     logger,
                                     requestId,
                                     watcherFaulted ? "after a cutter fault" : "at the cut").ConfigureAwait(false);
+                                drainAfterCancellation = true;
                             }
                         }
+                        else
+                        {
+                            await Task.WhenAny(generation, cancellationSignal).ConfigureAwait(false);
+                        }
 
-                        var result = await backendCalls.AwaitAsync(generation).ConfigureAwait(false);
+                        var result = drainAfterCancellation || generationCts.IsCancellationRequested
+                            ? await backendCalls.AwaitAsync(GenerationPipeline.DrainWithWarningsAsync(
+                                generation, options.DrainWarningSeconds, time, logger, requestId, shape)).ConfigureAwait(false)
+                            : await backendCalls.AwaitAsync(generation).ConfigureAwait(false);
                         if (sink.BridgeFault is { } bridgeFault)
                         {
                             throw bridgeFault;

@@ -105,6 +105,20 @@ public enum BackendCapabilities
     Cancellation = 1 << 3,
 }
 
+public static class BackendCapabilitiesExtensions
+{
+    /// <summary>Names the supported flags in declaration order for <c>/healthz</c>.</summary>
+    public static string[] ToHealthzNames(this BackendCapabilities capabilities)
+    {
+        var names = new List<string>(4);
+        if (capabilities.HasFlag(BackendCapabilities.SamplingOptions)) { names.Add("sampling_options"); }
+        if (capabilities.HasFlag(BackendCapabilities.SystemPromptContext)) { names.Add("system_prompt_context"); }
+        if (capabilities.HasFlag(BackendCapabilities.PromptLengthPreflight)) { names.Add("prompt_length_preflight"); }
+        if (capabilities.HasFlag(BackendCapabilities.Cancellation)) { names.Add("cancellation"); }
+        return names.ToArray();
+    }
+}
+
 /// <summary>Sampling knobs. Only forwarded when the backend advertises <see cref="BackendCapabilities.SamplingOptions"/>.</summary>
 public sealed record SamplingOptions(float? Temperature, float? TopP, int? TopK)
 {

@@ -43,6 +43,7 @@ public static class BridgeOptionsBinder
         }
 
         o.QueueCapacity = GetInt(configuration, nameof(BridgeOptions.QueueCapacity), o.QueueCapacity, min: 1, max: 1000);
+        o.DrainWarningSeconds = GetInt(configuration, nameof(BridgeOptions.DrainWarningSeconds), o.DrainWarningSeconds, min: 1, max: 86_400);
         o.ContextCacheSize = GetInt(configuration, nameof(BridgeOptions.ContextCacheSize), o.ContextCacheSize, min: 0, max: 256);
         o.ContextWindowHint = GetInt(configuration, nameof(BridgeOptions.ContextWindowHint), o.ContextWindowHint, min: 256, max: 1_000_000);
         o.TruncateHistory = GetBool(configuration, nameof(BridgeOptions.TruncateHistory), o.TruncateHistory);

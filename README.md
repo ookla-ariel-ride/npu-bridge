@@ -178,7 +178,7 @@ Keep-alive comments hold the connection open while that happens.
 |---|---|
 | `POST /v1/chat/completions` | chat completions, streaming and non-streaming |
 | `POST /v1/completions` | the legacy text-completion shape, streaming and non-streaming |
-| `GET /healthz` | backend state, load time, package identity, context-cache and queue counters, streaming keep-alive timings, diagnostics, the backend's known context window in tokens (`context_window_tokens`, null when unknown), `last_generation`, and `consecutive_backend_faults`. Returns 200 while ready with fewer than two consecutive backend faults; returns 503 when loading, unavailable, or degraded |
+| `GET /healthz` | backend state, load time, package identity, context-cache and queue counters, streaming keep-alive timings, diagnostics, the backend's known context window in tokens (`context_window_tokens`, null when unknown), supported backend capabilities (`capabilities`, snake_case names in enum order), `last_generation`, and `consecutive_backend_faults`. Returns 200 while ready with fewer than two consecutive backend faults; returns 503 when loading, unavailable, or degraded |
 | `GET /v1/models`, `GET /v1/models/{id}` | the active model id |
 | `POST /debug/generate` | one literal prompt into the backend with timing. Diagnostic, loopback only |
 | `POST /debug/tokenize` | the backend's token count of a literal text, and which counter answered. Diagnostic, loopback only, works while the model loads |
@@ -339,6 +339,7 @@ everything.
 | `--queue-capacity <n>` | `4` | requests that may wait for the one worker; one that arrives to a full queue gets 429 `queue_full` and a `Retry-After` |
 | `--truncate-history` | off | drop the oldest exchanges on overflow instead of returning 400 |
 | `--context-window-hint <tokens>` | `4096` | a warning is logged when a conversation reaches nine tenths of it; overflow itself is decided by the model's preflight |
+| `--drain-warning-seconds <n>` | `10` | interval between warnings while a cancelled generation is still draining |
 | `--system-prompt-placement auto\|native\|prompt` | `auto` | deliver the system message through the backend's own context, or fold it into the prompt text |
 | `--tool-emulation on\|off` | on | emulated function calling; `off` makes `tools` and `tool_choice` accepted-and-ignored again |
 | `--tool-schema compact\|full` | `compact` | compact signatures or whole JSON Schema in the injected block; full costs most of the window on a real tool set |

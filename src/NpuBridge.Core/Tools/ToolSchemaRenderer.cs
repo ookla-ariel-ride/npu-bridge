@@ -27,7 +27,7 @@ internal static class ToolSchemaRenderer
     private const string Preamble = "You can call tools. Available tools:";
     private const string CallInstruction = "To call one or more tools, reply with ONLY this JSON in a ```json fence and nothing else:";
     private const string Envelope = """{"tool_calls":[{"name":"<tool>","arguments":{...}}]}""";
-    private const string OptionalClosing = "If no tool is needed, answer normally in plain text.";
+    private const string OptionalClosing = "If no tool is needed, answer normally in plain text. Never reply with an empty tool_calls list.";
     private const string RequiredClosing = "A tool call is required for this message: reply with only that JSON, never plain text.";
 
     /// <summary>An em dash, written as an escape so the separator survives any re-encoding of this file.</summary>

@@ -60,12 +60,14 @@ internal static class StreamingPipeline
         SseStream sse,
         ChannelReader<string> reader,
         StreamingOptions streaming,
+        TimeProvider time,
         CancellationToken cancellationToken) =>
         WaitForDeltaAsync(
             sse,
             reader,
             streaming,
             streaming.FirstKeepAliveDelay > TimeSpan.Zero ? streaming.FirstKeepAliveDelay : streaming.KeepAliveInterval,
+            time,
             cancellationToken);
 
     /// <summary>
@@ -78,6 +80,7 @@ internal static class StreamingPipeline
         ChannelReader<string> reader,
         StreamingOptions streaming,
         TimeSpan firstDelay,
+        TimeProvider time,
         CancellationToken cancellationToken)
     {
         var wait = reader.WaitToReadAsync(CancellationToken.None).AsTask();
@@ -97,7 +100,7 @@ internal static class StreamingPipeline
                 // internal promise unregisters itself from `wait` and releases its timer on the timeout
                 // path as well as on completion, so neither continuations nor timers accumulate however
                 // long the model takes to produce its first token.
-                return await wait.WaitAsync(next, cancellationToken).ConfigureAwait(false);
+                return await wait.WaitAsync(next, time, cancellationToken).ConfigureAwait(false);
             }
             catch (TimeoutException)
             {
@@ -194,6 +197,16 @@ internal static class StreamingPipeline
     /// so <c>Handled</c> is always true there in practice) and once after it ends -- never more than
     /// twice, since Acquire moving inside the closure means there is only ever one scheduled attempt
     /// per request now (Finding 2's fix).
+    ///
+    /// The await below is a plain one, and deliberately: every position this is called from has already
+    /// established that the schedule is over. The pre-loop call is guarded by <c>IsCompleted</c>; every
+    /// post-loop call follows a reader loop that ended because the channel completed, and the scheduled
+    /// closure completes the channel in the statement before it returns. A drain that warns while it
+    /// waits therefore belongs at the two places a wait can really happen -- the cut, which cancelled a
+    /// generation and still needs its outcome for the finish chunk, and the endpoint's <c>finally</c>,
+    /// the single settlement point every client abort now reaches -- and not here, where it would be a
+    /// warning nobody can ever see. A round of that plumbing was written here and removed again once the
+    /// abort was routed to the finally instead.
     /// </summary>
     public static async Task<SchedulerOutcomeReport> ReportSchedulerOutcomeAsync(
         Task<ScheduleResult<ChatAttemptResult>> generation,
