@@ -20,7 +20,10 @@ section used to duplicate actually lives; `docs/SESSION-HANDOFF.md` carries the 
 what to do next; `docs/FUTURE.md` holds deferred work. Read the handoff first; update DECISIONS and
 FUTURE whenever work changes a choice or defers something.
 
-Current state: `main` remains `66e309b` until the wave PR merges. `wave/chunk8-leftovers` is at `949ed25`, with 996 tests; the last clean hardware smoke on that tip passed all steps (0 skipped, 7 informational), with `first-generation RPC retry: 0` and final health `ok`. The board's `integrationBranch` is still `wave/chunk8-leftovers`; no PR has been opened yet. The repository is `ookla-ariel-ride/npu-bridge`.
+Current state: `main` is `5b34d4f`, the merge of PR #40 (the `chunk8-leftovers` wave, D104) on 2026-09-22.
+996 tests; CI ran them on PR #40. The last clean hardware smoke ran on `949ed25`, the wave's last code
+commit: all steps, 0 skipped, 7 informational, `first-generation RPC retry: 0`, final health `ok`. The
+board's `integrationBranch` is `main`; no wave is open. The repository is `ookla-ariel-ride/npu-bridge`.
 
 Standing facts that will cost you a session if you do not know them:
 
@@ -44,9 +47,11 @@ Standing facts that will cost you a session if you do not know them:
   can use this bridge at all. Compliance below that boundary is near-perfect; the window is the
   constraint, not the model's protocol discipline.
 
-Open issues carry the rest: #24, #27, #28, #17 and #33 land with the wave PR; #15 stays open for its item 7 (the LAN `--listen` step) and
-the manual checklist, after PR #38 closed it by accident (the body said "does not close #15", and
-GitHub reads that as a closing keyword) and it was reopened; #2, #11, #14 and #16 are longer-running.
+Open issues carry the rest: #15 stays open for its item 7 (the LAN `--listen` step) and the manual
+checklist; it has been closed by accident twice, once by a PR body and once by a commit message that
+quoted the PR body's wording, because GitHub's parser reads a closing verb before an issue number
+wherever it appears, negation and quotation marks included, so never write one near an issue that
+stays open; #2, #11, #14 and #16 are longer-running. #24, #27, #28, #17 and #33 closed with PR #40.
 
 ## Machine reality
 

@@ -1,6 +1,14 @@
-# Session handoff, 2026-09-21: chunk8-leftovers wave ready for its PR
+# Session handoff, 2026-09-22: the chunk8-leftovers wave is merged, `main` is `5b34d4f`, no wave open
 
-The chunk8-leftovers wave closed #24, #27, #28, #17 and #33 in 21 commits over `main`. The code tip is `949ed25` on `wave/chunk8-leftovers`; 996 tests passed at the end of the wave. The final smoke on that tip passed all steps, with 0 skipped, 7 informational, `first-generation RPC retry: 0`, client disconnect drain followed by the next request in 879 ms, readiness capabilities for sampling options, system prompt context, prompt-length preflight and cancellation, and final health `ok`. The PR had not yet been opened, and the board's `integrationBranch` was still the wave branch.
+The chunk8-leftovers wave closed #24, #27, #28, #17 and #33 in 23 commits over `main` and merged as
+PR #40 (`5b34d4f`, 2026-09-22) after CI passed on the tip. The wave's last code commit is `949ed25`;
+996 tests. The final smoke on that commit passed all steps, with 0 skipped, 7 informational,
+`first-generation RPC retry: 0`, client disconnect drain followed by the next request in 879 ms,
+readiness capabilities for sampling options, system prompt context, prompt-length preflight and
+cancellation, and final health `ok`. The board's `integrationBranch` is back on `main`; every ticket
+is done. #15 was reopened a second time after the merge: a commit message on PR #39 had quoted the PR
+body wording that closed it the first time, and GitHub applied the keyword inside the quotation. The
+#24 landing comment is posted.
 
 ## What the wave taught
 
@@ -8,4 +16,10 @@ A review filed after integration bound to the integrated hash, so reviews should
 
 ## Do this next
 
-Push `wave/chunk8-leftovers` and open its PR with `closes #24`, `closes #27`, `closes #28`, `closes #17` and `closes #33`. Never put a closing verb before an issue that stays open. Let CI run, merge the PR, then run `git switch main && git pull` and repoint the board's `integrationBranch` to `main`. Close idle WSL, Edge WebView and Claude sessions before the next hardware run because the machine reached memory pressure at the end of this wave. October 1 is the first date an Aion Instruct package can run on this machine. The next-wave candidates are #15 item 7, #14 and #16.
+`git switch main && git pull`, then `dotnet build; dotnet test` (expect 996). Close idle WSL, Edge
+WebView and Claude sessions before the next hardware run: the machine reached memory pressure at the
+end of this wave and the harness killed a background smoke run for it. Never put a closing verb before
+an issue number that stays open, in a PR body or a commit message, and never quote such a phrase with a
+real number either. October 1 is the first date an Aion Instruct package can run on this machine (a
+`--backend phi-silica` smoke under the registry override, a re-measure of the usable window). The
+next-wave candidates are #15 item 7, #14 and #16; #2 and #11 wait on Microsoft.
