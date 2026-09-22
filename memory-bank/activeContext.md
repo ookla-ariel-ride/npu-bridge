@@ -3,7 +3,10 @@
 _Last updated: 2026-09-21, after the chunk8-leftovers wave. All eight chunks of `docs/PLAN.md` are built and merged; work is GitHub issues on wave branches that ship as pull requests. `docs/SESSION-HANDOFF.md` has the current state and the next integration steps._
 
 ## Where we are
-`main` remains `66e309b` until the wave PR merges. `wave/chunk8-leftovers` is at `949ed25`, with 996 tests. The last clean hardware smoke passed all steps with 0 skipped, 7 informational and `first-generation RPC retry: 0`; final health was `ok`. The board integration branch is still the wave branch and the PR has not been opened.
+`main` is `5b34d4f`, the merge of PR #40 on 2026-09-22; 996 tests, run by CI on that PR. The last
+clean hardware smoke ran on `949ed25`, the wave's last code commit: all steps, 0 skipped, 7
+informational, `first-generation RPC retry: 0`, final health `ok`. The board's `integrationBranch` is
+`main`, every ticket is done, and no wave is open.
 
 The wave summary was: the scheduler gate kept its three-signal exactly-once release; the stale-timeout guard stayed deliberately untested; the drain warning gained the no-timeout rule and required a hard-route fix for streamed aborts with no further delta; Aion cancellation remained unadvertised; and the empty tool-call fence stayed content and became a client re-ask contract. D104 records the rulings and the process lessons.
 
