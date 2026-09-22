@@ -73,6 +73,8 @@ agent system prompt competing for the same context window, tracked as issue #21.
 that leans on tool calling for its core loop should treat this bridge as unproven for that case until
 it is run against the tool set in question.
 
+A reply that consists only of an empty `tool_calls` fence reaches the client as content with `finish_reason: stop`. Treat it as “no answer” and re-ask. The bridge does not strip the fence (D104).
+
 **A hand-rolled SSE reader that assumes every line is `data:` or blank will misparse this stream.**
 Between the first byte and the first token, and again if a reply buffers for tool-call detection, the
 bridge sends `: keep-alive\n\n` comment lines to hold the connection open (a legal SSE comment,

@@ -1,19 +1,11 @@
 # Active Context: npu-bridge
 
-_Last updated: 2026-09-16, after PR #38 (the `smoke` wave, D103) merged. **All eight chunks of
-`docs/PLAN.md` are built and merged; the plan is complete.** Work is GitHub issues, run as board waves
-on `wave/<name>` branches that ship as pull requests; `docs/SESSION-HANDOFF.md` has the current state
-and what the last session taught._
+_Last updated: 2026-09-21, after the chunk8-leftovers wave. All eight chunks of `docs/PLAN.md` are built and merged; work is GitHub issues on wave branches that ship as pull requests. `docs/SESSION-HANDOFF.md` has the current state and the next integration steps._
 
 ## Where we are
-`main` and `origin/main` are `9ebca06`, the merge of PR #38 on 2026-09-16, on top of PR #37
-(`8e9444e`, 2026-09-15). No wave is open; the board's `integrationBranch` is `main` and every ticket is
-done. 980 tests, run by CI on PR #38 (`Passed: 980, Failed: 0, Skipped: 0`).
+`main` remains `66e309b` until the wave PR merges. `wave/chunk8-leftovers` is at `949ed25`, with 996 tests. The last clean hardware smoke passed all steps with 0 skipped, 7 informational and `first-generation RPC retry: 0`; final health was `ok`. The board integration branch is still the wave branch and the PR has not been opened.
 
-**The last clean hardware smoke was on `edaf254`** (2026-09-15), the wave's last code commit: 41
-steps, 34 pass, 0 fail, 0 skip, 7 informational, final health `ok`, `first-generation RPC retry: 0`,
-the 26-pin baseline recorded in the handoff, and the D80 cross-check at 3,581 tokens. The run on
-`3c429ab` earlier that day had the same counts and pins line.
+The wave summary was: the scheduler gate kept its three-signal exactly-once release; the stale-timeout guard stayed deliberately untested; the drain warning gained the no-timeout rule and required a hard-route fix for streamed aborts with no further delta; Aion cancellation remained unadvertised; and the empty tool-call fence stayed content and became a client re-ask contract. D104 records the rulings and the process lessons.
 
 The machine is on Dev build 29667 (noticed 2026-09-16); both smoke runs passed on it. Chunk 6, the Aion
 Instruct Preview adapter, is merged but code-verified only: on build 29648 Windows never appended
@@ -63,32 +55,9 @@ Every code candidate was reviewed by a different model family than wrote it.
   the tracked region; the smoke's final-health read tolerates 503 again.
 
 ## Open threads
-No chunk is outstanding and no wave is open. #15 stays open for item 7 (the LAN `--listen` step) and
-its manual checklist; PR #38 closed it by accident through the phrase "does not close #15" and it was
-reopened.
-- **Next wave candidates:** #24 and #17 (scheduler and `/healthz`, both reshaped by this wave), #27
-  and #28 (the streaming drain), #33 (a ruling first: tell the model to answer in prose when no tool
-  applies, measure with the probe, then decide whether to strip an empty fence).
-- **Deferred from this wave's reviews** (`docs/FUTURE.md`, 2026-09-13 section): a bridge throw before
-  classification leaves `/healthz` stale; `duration_ms >= 0` is unfalsifiable and the cancellation
-  duration path is unreachable; attempt duration is plumbed four times where the scheduler measures
-  it once; `Caught` is last-exception equality; `DeltaGate` ignores cancellation and its counters are
-  backend-wide; two twins of the disconnect test are still on `TokenDelay`; the debug endpoint's
-  mid-generation abort writes a body into a dead connection.
-- **Coverage (#14, #15, #16)**, **#11** (Aion Plan, no SDK), **#2** (Aion hardware half, blocked on
-  the OS). Aion's overflow status is unmeasured; the status-driven truncation path (D73) is exercised
-  by the fake only and must be re-checked when any Aion generation runs.
-- Two Toolshed defects still unreported upstream: serena's single active project under concurrent
-  worktree executors (serena was not used at all this session, by anyone), and the observability
-  plugin's missing `windows_arm64` Collector archive (`techContext.md`).
+The wave closed #24, #27, #28, #17 and #33. #15 stays open for item 7 and its manual checklist; #14 and #16 remain coverage candidates. #2 and #11 remain Aion work, with the hardware blocker still open. The deferred drain and scheduler findings are recorded in `docs/FUTURE.md` under 2026-09-21.
 
 ## How to resume
-1. Read `CLAUDE.md`, then `docs/SESSION-HANDOFF.md`, then `docs/DECISIONS.md` D100 to D103.
-2. `git switch main && git pull`, then `dotnet build; dotnet test` (expect 980). Do not build while a
-   smoke server is running.
-3. Optional: `--backend aion` on build 29667 and one `/healthz` read, recorded on issue #2 either way.
-4. Resolve the still-undecided #33 ruling and report the serena concurrent-worktree defect to Eigenwise/eigenwise-toolshed.
-5. Cut the next wave from `main`: one ticket per logical change (not per issue when an issue mixes a
-   refactor with a behaviour change), `worktreeBase: local-main`, verify fields as one command or an
-   `&&` chain, a cross-family review bound to every code candidate before it integrates, and the
-   whole-branch `/code-review` before the PR.
+1. Push `wave/chunk8-leftovers` and open the PR with the five `closes` lines named in `docs/SESSION-HANDOFF.md`.
+2. Let CI run, merge, then switch to `main`, pull, and repoint the board integration branch to `main`.
+3. Close idle sessions before hardware work because the machine reached memory pressure during this wave. October 1 is the first Aion Instruct package date; #15 item 7, #14 and #16 are next-wave candidates.

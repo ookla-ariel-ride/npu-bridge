@@ -15,17 +15,12 @@ bypass the tool-call emulation rather than use it.
 
 **All eight chunks of `docs/PLAN.md` are built and merged; there is no next chunk.** Work from here
 is GitHub issues. `docs/PLAN.md` is the signed-off design; `docs/DECISIONS.md` records why things are
-the way they are, decision by decision (D1 to D102), and is where the chunk-by-chunk history this
+the way they are, decision by decision (D1 to D104), and is where the chunk-by-chunk history this
 section used to duplicate actually lives; `docs/SESSION-HANDOFF.md` carries the current state and
 what to do next; `docs/FUTURE.md` holds deferred work. Read the handoff first; update DECISIONS and
 FUTURE whenever work changes a choice or defers something.
 
-Current state: `main` is `9ebca06`, the merge of PR #38 (the `smoke` wave, D103) on 2026-09-16, on top of
-PR #37 (the `leftovers` wave, D100 to D102) merged 2026-09-15. 980 tests pass; CI ran them on PR #38
-(`Passed: 980, Failed: 0, Skipped: 0`). The last clean hardware smoke ran on `edaf254`, the wave's last
-code commit: 41 steps, 34 pass, 0 skipped, 7 informational, `first-generation RPC retry: 0`, and the
-D80 cross-check matched `context_window_tokens` 3581. The board's `integrationBranch` is `main`; no
-wave is open. The repository is `ookla-ariel-ride/npu-bridge`.
+Current state: `main` remains `66e309b` until the wave PR merges. `wave/chunk8-leftovers` is at `949ed25`, with 996 tests; the last clean hardware smoke on that tip passed all steps (0 skipped, 7 informational), with `first-generation RPC retry: 0` and final health `ok`. The board's `integrationBranch` is still `wave/chunk8-leftovers`; no PR has been opened yet. The repository is `ookla-ariel-ride/npu-bridge`.
 
 Standing facts that will cost you a session if you do not know them:
 
@@ -49,10 +44,9 @@ Standing facts that will cost you a session if you do not know them:
   can use this bridge at all. Compliance below that boundary is near-perfect; the window is the
   constraint, not the model's protocol discipline.
 
-Open issues carry the rest: #24, #27 and #28 remain from chunk 8; #33 (an empty `tool_calls` fence
-delivered as content) still needs a ruling; #15 stays open for its item 7 (the LAN `--listen` step) and
+Open issues carry the rest: #24, #27, #28, #17 and #33 land with the wave PR; #15 stays open for its item 7 (the LAN `--listen` step) and
 the manual checklist, after PR #38 closed it by accident (the body said "does not close #15", and
-GitHub reads that as a closing keyword) and it was reopened; #2, #11, #14, #16 and #17 are longer-running.
+GitHub reads that as a closing keyword) and it was reopened; #2, #11, #14 and #16 are longer-running.
 
 ## Machine reality
 
@@ -357,7 +351,7 @@ Live today:
   miss alike; the log line's `prompt_chars` is what was sent, and it also carries `cache=hit|miss`,
   `tail_turns=N` and `truncated_turns=N`. `/healthz` reports `contexts_cached`,
   `context_cache_capacity`, `context_cache_hits`, `context_cache_misses`, `last_generation`,
-  `consecutive_backend_faults` and `context_window_tokens`. It returns `503 degraded` after two consecutive backend faults while
+  `consecutive_backend_faults`, `context_window_tokens` and `capabilities`. It returns `503 degraded` after two consecutive backend faults while
   still admitting requests, so a later successful generation can clear the state.
 - Token counts in `usage` are the backend's counter's (D80): Phi-3 tokens on Phi Silica, `ceil(chars/4)`
   on Aion and the fake (D44). `prompt_tokens` counts the whole rendered transcript plus the native
@@ -441,7 +435,9 @@ Chunk 8's rules, now live (D84 to D92):
 - **`queue_depth` is a live counter, not `Reader.Count` (D87).** It drops at whichever comes first of
   the caller cancelling while queued or the worker dequeuing, so a client that enqueues, gives up and
   retries cannot inflate `Retry-After` for a whole generation. The channel *slot* is still held until
-  drained, so a burst of aborted clients can still 429 a live one.
+  drained, so a burst of aborted clients can still 429 a live one. While a cancelled generation drains,
+  the bridge logs a Warning every `--drain-warning-seconds` interval, default 10 seconds, without timing
+  out or disposing the context.
 - **A queued job that never ran is 503 `queue_shutting_down`; one that ran and threw its own
   `OperationCanceledException` is a 502 through `GenerationFailure` (D88).** `ScheduleResultKind.Cancelled`
   carries `Ran` to tell them apart, because the second is a backend contract violation and must not be
@@ -455,7 +451,8 @@ Chunk 8's rules, now live (D84 to D92):
   that window; it produced the leaked cancellation registration and the stuck `_liveQueueDepth`. Arm
   before the write, and use `Interlocked` on *both* sides — the two flags are a Dekker pair, and ARM64
   permits the store-buffer reordering that plain volatile release/acquire does not close. Its
-  regression test is probabilistic (~60 % catch rate); issue #24 wants a deterministic one.
+  regression test is probabilistic (~60 % catch rate); issue #24 wants a deterministic one. D104 records
+  the addendum for a cancellation between `TryWrite` and `MarkEnteredQueue`.
 
 ## Code navigation: use serena
 

@@ -50,7 +50,9 @@ with a `respond` factory (the streamed half has been `StreamingPipeline` since D
 below exists in two shared places, never per endpoint. One worker reads a
 bounded `Channel<GenerationJob>` (`--queue-capacity`), a full queue is 429 with `Retry-After` and
 `rate_limit_error`/`queue_full`, and a job cancelled while still queued is dropped without touching
-the model. **Everything from here to the lease's settlement runs inside that scheduled closure**,
+the model. The queue-depth gate remembers cancellation between `TryWrite` and `MarkEnteredQueue` as a
+third signal, with `Interlocked` exactly-once release and the dequeue as its backstop (D92 addendum,
+D104). **Everything from here to the lease's settlement runs inside that scheduled closure**,
 because `Acquire`'s own calls — `CreateContext` and `GetUsablePromptLength` — are calls on the one
 shared `LanguageModel` handle exactly as `GenerateAsync` is, so guarding only the generation would
 leave the race the scheduler exists to close (D84). A `--truncate-history` retry stays in its slot
@@ -70,7 +72,7 @@ the one place failure, filtered and content are told apart, with the cut's verdi
 when it is legible differs by shape (D57, D81) → `ToolCallReply.From` over the finished text when a
 catalog is present, which both shapes call and neither decides for itself → settles the lease exactly
 once on every path: `Keep` after a `Complete`, uncut generation puts the context back under the new
-key, anything else disposes it in the `finally` (the stream cancels → drains → settles, D51; D72).
+key, anything else disposes it in the `finally` (the stream cancels → drains with periodic warnings → settles, D51; D72; D104).
 Around the whole closure sits `GenerationPipeline.BackendCallTracker` (D102): every call on the
 shared model handle (`CreateContext`, `GetUsablePromptLength`, `GenerateAsync`; eight sites over the
 five shapes) runs through it, and the unfiltered catch records a `/healthz` backend fault only for the
